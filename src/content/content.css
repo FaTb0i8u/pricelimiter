@@ -1,0 +1,192 @@
+/*
+ * Styles injected into google.com. Everything is namespaced under `ppp-` or a
+ * `data-ppp-*` attribute so nothing can leak into Google's own layout. The
+ * control panel itself lives in a shadow root and is not styled from here.
+ */
+
+[data-ppp-hidden='true'] {
+  display: none !important;
+}
+
+[data-ppp-card] {
+  transition: opacity 120ms ease-in-out;
+}
+
+[data-ppp-card][data-ppp-state='fail'][data-ppp-dim='true'] {
+  opacity: 0.4;
+}
+
+.ppp-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  /* Must outrank the store's own in-card layers. Google's sponsored units put
+     the product image wrapper (.pla-unit-image) at z-index 6, which painted
+     clean over a badge at 5: the badge was present, correct and completely
+     invisible on every sponsored result. A small number is a bet that no store
+     stacks anything above it, and that bet is already lost. This is high
+     enough to win in-card without reaching for the 32-bit maximum, which would
+     also cover site menus and modals that legitimately belong on top. */
+  z-index: 9999;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 12px);
+  box-sizing: border-box;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font: 600 11px/1.45 Roboto, Arial, system-ui, sans-serif;
+  letter-spacing: 0.1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  background: #f1f3f4;
+  border-color: #dadce0;
+  color: #3c4043;
+}
+
+.ppp-badge[data-ppp-state='pass'] {
+  background: #e6f4ea;
+  border-color: #a8dab5;
+  color: #0d652d;
+}
+
+.ppp-badge[data-ppp-state='fail'] {
+  background: #fce8e6;
+  border-color: #f5b5ae;
+  color: #a50e0e;
+}
+
+.ppp-badge[data-ppp-state='unknown'],
+.ppp-badge[data-ppp-state='na'] {
+  background: #f1f3f4;
+  border-color: #dadce0;
+  color: #5f6368;
+}
+
+.ppp-badge[data-ppp-best='true'] {
+  background: #0d652d;
+  border-color: #0d652d;
+  color: #fff;
+}
+
+.ppp-badge-best {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-size: 10px;
+}
+
+/* Separator, drawn only when the "Best value" label is actually present. */
+.ppp-badge-best:not(:empty)::after {
+  content: '\00b7';
+  margin: 0 2px 0 4px;
+  font-weight: 400;
+}
+
+.ppp-badge-flag {
+  font-weight: 400;
+  opacity: 0.85;
+}
+
+/*
+ * Highlight for the cheapest visible card.
+ *
+ * `outline` is used rather than `border` deliberately: a border participates in
+ * layout and would shift every card in Google's grid. The negative offset draws
+ * it just inside the card's own edge so it cannot overlap a neighbour, and
+ * outlines follow border-radius in modern engines.
+ */
+[data-ppp-card][data-ppp-best='true'] {
+  outline: 3px solid #0d652d;
+  outline-offset: -3px;
+  border-radius: 8px;
+}
+
+/* The highlight already marks this card, so suppress the doubled UA ring that
+   appears when the jump moves focus here. */
+[data-ppp-card][data-ppp-best='true']:focus,
+[data-ppp-card][data-ppp-best='true']:focus-visible {
+  outline: 3px solid #0d652d;
+  outline-offset: -3px;
+}
+
+/* Brief attention pulse when the panel jumps to the best card. */
+[data-ppp-card][data-ppp-flash='true'] {
+  animation: ppp-flash 1.6s ease-out 1;
+}
+
+@keyframes ppp-flash {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(13, 101, 45, 0);
+  }
+  10%,
+  60% {
+    box-shadow: 0 0 0 6px rgba(13, 101, 45, 0.35);
+  }
+}
+
+[data-ppp-debug='true'] {
+  outline: 2px dashed rgba(26, 115, 232, 0.7);
+  outline-offset: -2px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .ppp-badge {
+    background: #303134;
+    border-color: #5f6368;
+    color: #e8eaed;
+  }
+  .ppp-badge[data-ppp-state='pass'] {
+    background: #12351f;
+    border-color: #1e8e3e;
+    color: #81c995;
+  }
+  .ppp-badge[data-ppp-state='fail'] {
+    background: #3b1512;
+    border-color: #b3261e;
+    color: #f28b82;
+  }
+  .ppp-badge[data-ppp-state='unknown'],
+  .ppp-badge[data-ppp-state='na'] {
+    background: #303134;
+    border-color: #5f6368;
+    color: #bdc1c6;
+  }
+  /* Declared after the state rules so it wins: equal specificity, later wins. */
+  .ppp-badge[data-ppp-best='true'] {
+    background: #1e8e3e;
+    border-color: #1e8e3e;
+    color: #fff;
+  }
+  [data-ppp-card][data-ppp-best='true'],
+  [data-ppp-card][data-ppp-best='true']:focus,
+  [data-ppp-card][data-ppp-best='true']:focus-visible {
+    outline-color: #1e8e3e;
+  }
+  @keyframes ppp-flash {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 rgba(129, 201, 149, 0);
+    }
+    10%,
+    60% {
+      box-shadow: 0 0 0 6px rgba(129, 201, 149, 0.4);
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-ppp-card] {
+    transition: none;
+  }
+  /* Keep the jump feedback, drop the motion: a static glow that is removed
+     when the flash attribute is cleared. */
+  [data-ppp-card][data-ppp-flash='true'] {
+    animation: none;
+    box-shadow: 0 0 0 6px rgba(13, 101, 45, 0.35);
+  }
+}

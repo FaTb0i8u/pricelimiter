@@ -1,0 +1,65 @@
+{
+  "manifest_version": 3,
+  "name": "Unit Price Filter",
+  "version": "0.2.0",
+  "description": "Filter Google, Amazon and Walmart results by price per pound, kilogram, litre or fluid ounce.",
+  "minimum_chrome_version": "102",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "*://www.google.com/*",
+    "*://www.amazon.com/*",
+    "*://www.amazon.co.uk/*",
+    "*://www.amazon.ca/*",
+    "*://www.amazon.com.au/*",
+    "*://www.walmart.com/*",
+    "*://www.walmart.ca/*"
+  ],
+  "background": {
+    "service_worker": "src/background/service-worker.js"
+  },
+  "action": {
+    "default_title": "Toggle the unit price filter panel",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://www.google.com/search*",
+        "*://www.google.com/shopping/*",
+        "*://www.amazon.com/s*",
+        "*://www.amazon.com/gp/search*",
+        "*://www.amazon.co.uk/s*",
+        "*://www.amazon.ca/s*",
+        "*://www.amazon.com.au/s*",
+        "*://www.walmart.com/search*",
+        "*://www.walmart.com/browse/*",
+        "*://www.walmart.com/shop/*",
+        "*://www.walmart.ca/search*",
+        "*://www.walmart.ca/browse/*"
+      ],
+      "js": [
+        "src/common/units.js",
+        "src/common/parse-price.js",
+        "src/common/parse-quantity.js",
+        "src/common/settings.js",
+        "src/content/sites.js",
+        "src/content/site-adapter.js",
+        "src/content/panel.js",
+        "src/content/main.js"
+      ],
+      "css": ["src/content/content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
