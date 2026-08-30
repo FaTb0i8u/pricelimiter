@@ -13,8 +13,10 @@
   var DEFAULTS = {
     /** Master switch for hiding results. Badges are shown either way. */
     filterEnabled: false,
-    /** Maximum acceptable price per base unit, in the page's currency. */
+    /** Legacy default and migration source for per-currency thresholds. */
     threshold: 3,
+    /** ISO currency code -> maximum acceptable price per base unit. */
+    thresholds: {},
     /** One of PPP.units.BASES: 'lb' | 'kg' | 'oz' | 'l' | 'floz'. */
     basis: 'lb',
     /** Hide cards whose size could not be determined. Off by default: the
@@ -39,7 +41,7 @@
   function sanitize(raw) {
     var out = {};
     Object.keys(DEFAULTS).forEach(function (key) {
-      out[key] = DEFAULTS[key];
+      out[key] = key === 'thresholds' ? {} : DEFAULTS[key];
     });
     if (!raw || typeof raw !== 'object') return out;
 
@@ -59,7 +61,43 @@
     if (!PPP.units.BASES[out.basis]) out.basis = DEFAULTS.basis;
     out.threshold = Math.min(Math.max(out.threshold, 0), 1e6);
     out.minConfidence = Math.min(Math.max(out.minConfidence, 0), 1);
+    if (raw.thresholds && typeof raw.thresholds === 'object') {
+      Object.keys(raw.thresholds).forEach(function (currency) {
+        var value = Number(raw.thresholds[currency]);
+        if (/^[A-Z]{3}$/.test(currency) && isFinite(value) && value >= 0) {
+          out.thresholds[currency] = Math.min(value, 1e6);
+        }
+      });
+    } else if (raw.threshold !== undefined && raw.threshold !== null) {
+      // Older releases stored one unqualified amount. Preserve that user's
+      // choice for the original USD storefront instead of applying it to a
+      // different currency without consent.
+      out.thresholds.USD = out.threshold;
+    }
     return out;
+  }
+
+  function thresholdFor(settings, currency) {
+    var clean = sanitize(settings);
+    return currency && Object.prototype.hasOwnProperty.call(clean.thresholds, currency)
+      ? clean.thresholds[currency]
+      : DEFAULTS.threshold;
+  }
+
+  function withCurrency(settings, currency) {
+    var clean = sanitize(settings);
+    clean.threshold = thresholdFor(clean, currency);
+    return clean;
+  }
+
+  function setThreshold(settings, currency, value) {
+    var clean = sanitize(settings);
+    if (!currency || !/^[A-Z]{3}$/.test(currency)) return clean;
+    var amount = Number(value);
+    if (!isFinite(amount) || amount < 0) return clean;
+    clean.thresholds[currency] = Math.min(amount, 1e6);
+    clean.threshold = clean.thresholds[currency];
+    return clean;
   }
 
   function load() {
@@ -104,6 +142,9 @@
     DEFAULTS: DEFAULTS,
     STORAGE_KEY: STORAGE_KEY,
     sanitize: sanitize,
+    thresholdFor: thresholdFor,
+    withCurrency: withCurrency,
+    setThreshold: setThreshold,
     load: load,
     save: save,
     subscribe: subscribe

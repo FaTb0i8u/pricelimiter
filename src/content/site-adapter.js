@@ -595,6 +595,42 @@
     return '';
   }
 
+  /**
+   * The first product-detail URL represented by a card. This deliberately
+   * returns only http(s) URLs: callers may hand it to the extension service
+   * worker for a user-requested lookup, so data: and javascript: URLs must
+   * never escape the page.
+   */
+  function extractProductUrl(card) {
+    var links = card.querySelectorAll('a[href]');
+    for (var i = 0; i < links.length; i++) {
+      var href = links[i].href || links[i].getAttribute('href') || '';
+      var parsed;
+      try {
+        parsed = new URL(href, location.href);
+      } catch (e) {
+        continue;
+      }
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue;
+
+      // Google cards often wrap a merchant URL in `adurl`, `url`, or `q`.
+      // Unwrap it so the background can make a permission-scoped request to
+      // the actual supported retailer, rather than fetching a redirect page.
+      if (GOOGLE_HOST_RE.test(parsed.hostname)) {
+        var wrapped = parsed.searchParams.get('adurl') ||
+          parsed.searchParams.get('url') || parsed.searchParams.get('q');
+        if (!wrapped) continue;
+        try {
+          parsed = new URL(wrapped);
+        } catch (e) {
+          continue;
+        }
+      }
+      return parsed.href;
+    }
+    return '';
+  }
+
   /** Text used for size extraction: title first, whole card as a fallback. */
   function extractSizeText(card, title) {
     var full = spacedText(card);
@@ -611,6 +647,7 @@
     extractUnitPrice: extractUnitPrice,
     extractSizeText: extractSizeText,
     extractUrlSizeText: extractUrlSizeText,
+    extractProductUrl: extractProductUrl,
     sizeTextFromUrl: sizeTextFromUrl,
     isProductImage: isProductImage,
     cleanText: cleanText,

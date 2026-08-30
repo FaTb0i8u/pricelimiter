@@ -12,10 +12,6 @@
   transition: opacity 120ms ease-in-out;
 }
 
-[data-ppp-card][data-ppp-state='fail'][data-ppp-dim='true'] {
-  opacity: 0.4;
-}
-
 .ppp-badge {
   position: absolute;
   top: 6px;

@@ -35,6 +35,21 @@ nothing to `npm install`:
 node --test 'test/*.test.js'
 ```
 
+### Package-size lookup
+
+When a result does not list a package size, the panel can offer **Find package
+sizes**. This is an explicit, bounded lookup (at most eight cards per click),
+not background crawling. It requests only a linked product page that is already
+within the extension's existing site permissions, sends no retailer cookies,
+and accepts only explicit structured product metadata such as Schema.org
+`weight` or `net weight`. It therefore helps most on Amazon and Walmart; Google
+Shopping links to third-party merchants that are intentionally outside the
+extension's permissions are left untouched.
+
+Price limits are saved separately for each detected currency. A limit set on a
+US storefront is not silently reused for Canadian dollars, pounds, or Australian
+dollars.
+
 ### Verifying the DOM adapter
 
 Google serves a CAPTCHA to automated browsers, so the adapter cannot be driven

@@ -72,9 +72,23 @@ test('settings are sanitised against hostile or stale storage', () => {
   assert.strictEqual(clean.filterEnabled, true);
   assert.strictEqual(clean.minConfidence, 1);
   assert.strictEqual(clean.unknownKey, undefined);
+  assert.strictEqual(clean.thresholds.USD, 4.5);
 
   const defaults = settings.sanitize(null);
   assert.deepStrictEqual(defaults, settings.DEFAULTS);
+});
+
+test('thresholds are isolated by currency and reject hostile entries', () => {
+  const clean = settings.sanitize({
+    thresholds: { USD: '8.5', CAD: 12, bad: 99, EUR: -1 }
+  });
+  assert.deepStrictEqual(clean.thresholds, { USD: 8.5, CAD: 12 });
+  assert.strictEqual(settings.thresholdFor(clean, 'USD'), 8.5);
+  assert.strictEqual(settings.thresholdFor(clean, 'GBP'), 3);
+
+  const updated = settings.setThreshold(clean, 'GBP', 6.25);
+  assert.strictEqual(settings.thresholdFor(updated, 'USD'), 8.5);
+  assert.strictEqual(settings.thresholdFor(updated, 'GBP'), 6.25);
 });
 
 test('unit conversion to a filter basis', () => {

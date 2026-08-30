@@ -26,6 +26,7 @@
   };
 
   var RESCAN_DEBOUNCE_MS = 300;
+  var MAX_DETAIL_LOOKUPS = 8;
   /** Kept in step with the ppp-flash animation in content.css. */
   var FLASH_DURATION_MS = 1600;
 
@@ -39,6 +40,9 @@
     flashTimer: null,
     lastUrl: location.href,
     bestCard: null,
+    currency: null,
+    detailLookupBusy: false,
+    lastStats: null,
     // Set once per scan cycle when the URL test fails but the page turns out
     // to hold a results grid anyway. See looksLikeResultsByContent().
     contentActive: false
@@ -47,6 +51,8 @@
   /** Per-element memo of the expensive parse work. */
   var analysisCache = new WeakMap();
   var positionPatched = new WeakSet();
+  var detailQuantities = new WeakMap();
+  var detailAttempts = new WeakSet();
 
   /* ---------------------------------------------------------------- analyse */
 
@@ -62,11 +68,13 @@
 
     var sizeText = adapter.extractSizeText(card, title);
     var parsed = quantity.parseQuantity(sizeText.primary);
+    var quantitySource = parsed ? 'title' : '';
     if (!parsed && sizeText.secondary) {
       parsed = quantity.parseQuantity(sizeText.secondary);
       // Size found in surrounding card copy rather than the title is a weaker
       // signal - it may belong to a neighbouring line of text.
       if (parsed) parsed.confidence = Math.max(0.05, parsed.confidence - 0.15);
+      if (parsed) quantitySource = 'card';
     }
     if (!parsed) {
       // Last resort: the merchant's own product path, which often spells the
@@ -78,7 +86,12 @@
         // A slug names this product rather than a neighbour, but it is not
         // prose, so it is trusted a little less than a title.
         if (parsed) parsed.confidence = Math.max(0.05, parsed.confidence - 0.2);
+        if (parsed) quantitySource = 'url';
       }
+    }
+    if (!parsed && detailQuantities.has(card)) {
+      parsed = detailQuantities.get(card);
+      quantitySource = 'product page';
     }
 
     var data = {
@@ -86,6 +99,7 @@
       price: priceInfo,
       unitPrice: unitPriceInfo,
       quantity: parsed,
+      quantitySource: quantitySource,
       pricePerCanonical:
         priceInfo && parsed && parsed.amount > 0 ? priceInfo.amount / parsed.amount : null
     };
@@ -174,7 +188,7 @@
         state: 'na',
         altBase: altBase,
         unitPrice: data.pricePerCanonical * altBase.perBase,
-        source: 'title'
+        source: data.quantitySource || 'title'
       };
     }
 
@@ -183,7 +197,7 @@
       state: unitPrice <= settings.threshold ? 'pass' : 'fail',
       unitPrice: unitPrice,
       base: base,
-      source: 'title'
+      source: data.quantitySource || 'title'
     };
   }
 
@@ -319,7 +333,7 @@
       lines.push(
         'Size read: ' +
           quantity.formatQuantity(data.quantity.amount, data.quantity.dimension) +
-          ' (from "' + data.quantity.raw + '")'
+          ' (from ' + (data.quantitySource || 'title') + ': "' + data.quantity.raw + '")'
       );
       lines.push('Confidence: ' + Math.round(data.quantity.confidence * 100) + '%');
       if (data.quantity.flags.indexOf('pack-ambiguous') > -1) {
@@ -349,6 +363,15 @@
     return best;
   }
 
+  /** Resolve ambiguous "$" values from the supported storefront's locale. */
+  function pageCurrency(analyses) {
+    var host = location.hostname.toLowerCase();
+    if (/(^|\.)amazon\.co\.uk$/.test(host)) return 'GBP';
+    if (/(^|\.)(amazon|walmart)\.ca$/.test(host)) return 'CAD';
+    if (/(^|\.)amazon\.com\.au$/.test(host)) return 'AUD';
+    return dominantCurrency(analyses);
+  }
+
   /* ------------------------------------------------------------------- scan */
 
   var EMPTY_STATS = { total: 0, shown: 0, priced: 0, unknown: 0, best: null, currencySymbol: '$', hint: '' };
@@ -362,6 +385,7 @@
     Object.keys(state.settings).forEach(function (key) {
       view[key] = state.settings[key];
     });
+    view = settingsApi.withCurrency(view, state.currency);
     view.panelVisible = state.settings.panelVisible && isActive();
     return view;
   }
@@ -388,16 +412,18 @@
     var i;
     for (i = 0; i < cards.length; i++) analyses.push(analyzeCard(cards[i]));
 
-    var currency = dominantCurrency(analyses);
+    var currency = pageCurrency(analyses);
     var symbol = (currency && CURRENCY_SYMBOLS[currency]) || '$';
+    var pageSettings = settingsApi.withCurrency(state.settings, currency);
+    state.currency = currency;
 
     var stats = { total: cards.length, shown: 0, priced: 0, unknown: 0, best: null };
     var bestVerdict = null;
     state.bestCard = null;
 
     for (i = 0; i < cards.length; i++) {
-      var verdict = evaluate(analyses[i], state.settings);
-      var hidden = decorate(cards[i], analyses[i], verdict, state.settings, symbol);
+      var verdict = evaluate(analyses[i], pageSettings);
+      var hidden = decorate(cards[i], analyses[i], verdict, pageSettings, symbol);
 
       if (!hidden) stats.shown++;
       if (verdict.state === 'unknown') stats.unknown++;
@@ -424,6 +450,16 @@
       ? ''
       : 'Not a recognised results page \u2013 results may be mixed.';
 
+    var lookupCount = 0;
+    for (i = 0; i < cards.length; i++) {
+      if (!analyses[i].quantity && !detailAttempts.has(cards[i]) && adapter.extractProductUrl(cards[i])) {
+        lookupCount++;
+      }
+    }
+    if (lookupCount || state.detailLookupBusy) {
+      stats.detailLookup = { count: Math.min(lookupCount, MAX_DETAIL_LOOKUPS), busy: state.detailLookupBusy };
+    }
+    state.lastStats = stats;
     renderPanel(stats);
   }
 
@@ -469,6 +505,9 @@
         state.lastUrl = location.href;
         analysisCache = new WeakMap();
         state.contentActive = false;
+        // The toolbar override is an escape hatch for an unrecognised search
+        // URL, not permission to annotate every subsequent SPA route.
+        state.forced = false;
         reset();
       }
       // Only pay for the content probe when the cheap tests have already
@@ -560,11 +599,109 @@
   }
 
   function applySettings(patch) {
+    if (Object.prototype.hasOwnProperty.call(patch, 'threshold')) {
+      state.settings = settingsApi.setThreshold(state.settings, state.currency, patch.threshold);
+      delete patch.threshold;
+    }
     Object.keys(patch).forEach(function (key) {
       state.settings[key] = patch[key];
     });
     state.settings = settingsApi.sanitize(state.settings);
     settingsApi.save(state.settings);
+    scan();
+  }
+
+  function requestProductPage(url) {
+    return new Promise(function (resolve) {
+      if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.sendMessage) {
+        resolve(null);
+        return;
+      }
+      chrome.runtime.sendMessage({ type: 'ppp:fetch-product-page', url: url }, function (response) {
+        if (chrome.runtime.lastError || !response || !response.ok || typeof response.html !== 'string') {
+          resolve(null);
+          return;
+        }
+        resolve(response.html);
+      });
+    });
+  }
+
+  function structuredSizeText(value) {
+    if (typeof value === 'string' || typeof value === 'number') return String(value);
+    if (!value || typeof value !== 'object' || value.value === undefined) return '';
+    var unit = String(value.unitText || value.unitCode || '').toLowerCase();
+    var unitCodes = { lbr: 'lb', onz: 'oz', grm: 'g', kgr: 'kg', mlt: 'ml', ltr: 'l' };
+    return String(value.value) + (unitCodes[unit] || unit ? ' ' + (unitCodes[unit] || unit) : '');
+  }
+
+  /** Extract only explicit structured product fields from untrusted HTML. */
+  function detailSizeCandidates(html) {
+    var doc = new DOMParser().parseFromString(html, 'text/html');
+    var candidates = [];
+    var nodes = doc.querySelectorAll('[itemprop="weight"], meta[name="product:weight"], meta[property="product:weight"]');
+    for (var i = 0; i < nodes.length; i++) {
+      candidates.push(nodes[i].getAttribute('content') || nodes[i].textContent || '');
+    }
+    var scripts = doc.querySelectorAll('script[type="application/ld+json"]');
+    function visit(value) {
+       if (!value || typeof value !== 'object') return;
+       if (Array.isArray(value)) {
+         for (var j = 0; j < value.length; j++) visit(value[j]);
+         return;
+       }
+       if (value.weight) candidates.push(structuredSizeText(value.weight));
+       var properties = value.additionalProperty;
+       if (properties && !Array.isArray(properties)) properties = [properties];
+       if (properties) {
+         for (var k = 0; k < properties.length; k++) {
+           var property = properties[k] || {};
+           if (/^(?:net )?(?:weight|volume)|package (?:weight|size)$/i.test(property.name || '')) {
+             candidates.push(structuredSizeText(property.value));
+           }
+         }
+       }
+       Object.keys(value).forEach(function (key) {
+         if (key !== 'weight' && key !== 'additionalProperty') visit(value[key]);
+       });
+    }
+    for (var s = 0; s < scripts.length; s++) {
+      try { visit(JSON.parse(scripts[s].textContent)); } catch (error) { /* invalid vendor JSON */ }
+    }
+    return candidates;
+  }
+
+  async function findPackageSizes() {
+    if (state.detailLookupBusy) return;
+    var candidates = [];
+    for (var i = 0; i < state.cards.length && candidates.length < MAX_DETAIL_LOOKUPS; i++) {
+      var card = state.cards[i];
+      var data = analyzeCard(card);
+      if (data.quantity || detailAttempts.has(card)) continue;
+      var url = adapter.extractProductUrl(card);
+      if (url) candidates.push({ card: card, url: url });
+    }
+    if (!candidates.length) return;
+
+    state.detailLookupBusy = true;
+    renderPanel(state.lastStats || EMPTY_STATS);
+    for (var j = 0; j < candidates.length; j++) {
+       var candidate = candidates[j];
+       detailAttempts.add(candidate.card);
+       var html = await requestProductPage(candidate.url);
+       if (!html) continue;
+       var values = detailSizeCandidates(html);
+       for (var k = 0; k < values.length; k++) {
+         var parsed = quantity.parseQuantity(values[k]);
+         if (!parsed) continue;
+         parsed.confidence = Math.min(parsed.confidence, 0.75);
+         parsed.flags = parsed.flags.concat(['product-detail']);
+         detailQuantities.set(candidate.card, parsed);
+         analysisCache.delete(candidate.card);
+         break;
+       }
+    }
+    state.detailLookupBusy = false;
     scan();
   }
 
@@ -604,7 +741,8 @@
         analysisCache = new WeakMap();
         scan();
       },
-      onJumpToBest: jumpToBest
+      onJumpToBest: jumpToBest,
+      onFindSizes: findPackageSizes
     });
     state.panel.mount();
 

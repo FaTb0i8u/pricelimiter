@@ -29,10 +29,9 @@
   var PPP = (root.PPP = root.PPP || {});
 
   /**
-   * Amazon runs the same software on ~20 country domains (amazon.com,
-   * amazon.co.uk, amazon.com.au ...). The suffix is matched loosely because the
-   * markup is identical across all of them; the manifest is what actually
-   * limits where the extension may run.
+  * Amazon uses closely related markup across country domains. The matcher is
+  * deliberately broad for shared parsing logic, while manifest.json limits
+  * injection to the storefronts that have explicitly been validated.
    */
   var AMAZON_HOST_RE = /(^|\.)amazon\.[a-z]{2,3}(\.[a-z]{2})?$/i;
   var WALMART_HOST_RE = /(^|\.)walmart\.(com|ca)$/i;

@@ -56,6 +56,7 @@
     '    </div>',
     '    <p class="stats" data-role="stats" role="status" aria-live="polite"></p>',
     '    <button class="best" data-action="best" type="button" hidden></button>',
+    '    <button class="detail" data-action="detail" type="button" hidden></button>',
     '    <div class="footer">',
     '      <button class="link" data-action="rescan" type="button">Rescan page</button>',
     '      <span class="hint" data-role="hint"></span>',
@@ -124,6 +125,10 @@
     '  cursor: pointer; }',
     '.best:hover { background: #ceead6; }',
     '.best:focus-visible { outline: 2px solid #1a73e8; outline-offset: 1px; }',
+    '.detail { width: 100%; padding: 7px 10px; text-align: left; font: inherit; font-size: 12px;',
+    '  color: #1a73e8; background: #f8f9fa; border: 1px solid #dadce0; border-radius: 8px; cursor: pointer; }',
+    '.detail:hover:not(:disabled) { background: #e8f0fe; } .detail:disabled { color: #80868b; cursor: wait; }',
+    '.detail:focus-visible { outline: 2px solid #1a73e8; outline-offset: 1px; }',
     '.footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }',
     '.link { padding: 0; font: inherit; font-size: 12px; color: #1a73e8; background: none;',
     '  border: 0; cursor: pointer; text-decoration: underline; }',
@@ -139,6 +144,7 @@
     '  .number, .select { background: #202124; border-color: #5f6368; color: #e8eaed; }',
     '  .prefix { color: #9aa0a6; }',
     '  .best { background: #12351f; border-color: #1e8e3e; color: #81c995; }',
+    '  .detail { background: #292a2d; border-color: #5f6368; color: #8ab4f8; }',
     '  .link { color: #8ab4f8; } .hint { color: #80868b; }',
     '}',
     '@media (prefers-reduced-motion: reduce) { .track, .thumb { transition: none; } }'
@@ -171,6 +177,7 @@
       stats: shadow.querySelector('[data-role="stats"]'),
       hint: shadow.querySelector('[data-role="hint"]'),
       best: shadow.querySelector('[data-action="best"]'),
+      detail: shadow.querySelector('[data-action="detail"]'),
       collapse: shadow.querySelector('[data-action="collapse"]'),
       close: shadow.querySelector('[data-action="close"]'),
       rescan: shadow.querySelector('[data-action="rescan"]')
@@ -250,6 +257,9 @@
     refs.best.addEventListener('click', function () {
       handlers.onJumpToBest();
     });
+    refs.detail.addEventListener('click', function () {
+      handlers.onFindSizes();
+    });
 
     function render(settings, stats) {
       var base = BASES[settings.basis] || BASES.lb;
@@ -301,6 +311,16 @@
       } else {
         refs.best.hidden = true;
         refs.best.textContent = '';
+      }
+
+      if (stats.detailLookup) {
+        refs.detail.hidden = false;
+        refs.detail.disabled = !!stats.detailLookup.busy;
+        refs.detail.textContent = stats.detailLookup.busy
+          ? 'Looking for package sizes…'
+          : 'Find package sizes for up to ' + stats.detailLookup.count + ' results';
+      } else {
+        refs.detail.hidden = true;
       }
 
       refs.hint.textContent = stats.hint || '';
