@@ -68,11 +68,15 @@
   var STYLES = [
     // `all: initial` shields the panel from Google's stylesheets, but it also
     // beats the UA rule for [hidden], so display is restored explicitly.
-    ':host { all: initial; display: block; }',
+    // The host is appended directly to <html>. Keep that otherwise invisible
+    // box out of hit testing: some retailer layouts give it a page-width box,
+    // which can sit above result links even though the fixed panel is small.
+    ':host { all: initial; display: block; pointer-events: none; }',
     ':host([hidden]) { display: none; }',
     '*, *::before, *::after { box-sizing: border-box; }',
     '.panel {',
     '  position: fixed; right: 16px; bottom: 16px; z-index: 2147483000;',
+    '  pointer-events: auto;',
     '  width: 292px; max-width: calc(100vw - 32px);',
     '  font: 400 13px/1.5 Roboto, Arial, system-ui, sans-serif; color: #202124;',
     '  background: #fff; border: 1px solid #dadce0; border-radius: 12px;',
