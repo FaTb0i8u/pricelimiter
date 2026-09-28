@@ -141,11 +141,42 @@
     return forLocation(loc).isResultsPage(loc);
   }
 
+  /** Storefronts whose host alone fixes the currency. */
+  var HOST_CURRENCIES = [
+    { re: /(^|\.)amazon\.co\.uk$/i, currency: 'GBP' },
+    { re: /(^|\.)(amazon|walmart)\.ca$/i, currency: 'CAD' },
+    { re: /(^|\.)amazon\.com\.au$/i, currency: 'AUD' }
+  ];
+
+  /**
+   * Currency for a page, given the one most cards on it were priced in.
+   *
+   * A country storefront's host wins outright, because a bare "$" there is
+   * not US dollars. Otherwise the page's own prices win, since google.com and
+   * amazon.com both serve other currencies to travellers. Only when nothing on
+   * the page carried a currency does a known store fall back to USD - without
+   * that, the threshold box had no currency to save under and silently did
+   * nothing.
+   *
+   * @param {object} loc
+   * @param {string|null} observed dominant currency among the page's cards
+   * @returns {string|null} ISO 4217 code, or null on an unknown site
+   */
+  function currencyFor(loc, observed) {
+    var host = loc && loc.hostname ? String(loc.hostname) : '';
+    for (var i = 0; i < HOST_CURRENCIES.length; i++) {
+      if (HOST_CURRENCIES[i].re.test(host)) return HOST_CURRENCIES[i].currency;
+    }
+    if (observed) return observed;
+    return forLocation(loc).id === 'generic' ? null : 'USD';
+  }
+
   PPP.sites = {
     SITES: SITES,
     GENERIC: GENERIC_SITE,
     forLocation: forLocation,
-    isResultsPage: isResultsPage
+    isResultsPage: isResultsPage,
+    currencyFor: currencyFor
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 

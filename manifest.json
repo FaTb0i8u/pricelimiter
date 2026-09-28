@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Unit Price Filter",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "Filter Google, Amazon and Walmart results by price per pound, kilogram, litre or fluid ounce.",
   "minimum_chrome_version": "102",
   "permissions": ["storage"],
@@ -16,6 +16,10 @@
   ],
   "background": {
     "service_worker": "src/background/service-worker.js"
+  },
+  "options_ui": {
+    "page": "src/options/options.html",
+    "open_in_tab": true
   },
   "action": {
     "default_title": "Toggle the unit price filter panel",
@@ -53,6 +57,8 @@
         "src/common/parse-price.js",
         "src/common/parse-quantity.js",
         "src/common/settings.js",
+        "src/common/verdict.js",
+        "src/common/history.js",
         "src/content/sites.js",
         "src/content/site-adapter.js",
         "src/content/panel.js",

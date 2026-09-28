@@ -199,20 +199,16 @@
   function findCardsBySelector(scanRoot, selector) {
     var matched = scanRoot.querySelectorAll(selector);
     var kept = [];
-    var i;
-    var j;
-    for (i = 0; i < matched.length; i++) {
+    for (var i = 0; i < matched.length; i++) {
       var el = matched[i];
       if (el.closest('[data-ppp-ui]')) continue;
       if (!isVisible(el)) continue;
       // A card with no price is not a product tile (Walmart tags banners and
       // placeholders with the same attribute).
       if (!price.looksLikePrice(el.textContent)) continue;
-      var nested = false;
-      for (j = 0; j < matched.length; j++) {
-        if (matched[j] !== el && matched[j].contains(el)) { nested = true; break; }
-      }
-      if (!nested) kept.push(el);
+      var outer = el.parentElement && el.parentElement.closest(selector);
+      if (outer && outer !== scanRoot && scanRoot.contains(outer)) continue;
+      kept.push(el);
     }
     return kept;
   }
@@ -254,19 +250,33 @@
     var selector = currentSite().cardSelector;
     var cards = selector ? findCardsBySelector(scanRoot, selector) : [];
     var structural = findCardsStructurally(scanRoot);
+    if (!structural.length) return cards;
 
-    for (var i = 0; i < structural.length; i++) {
-      var el = structural[i];
-      var overlaps = false;
-      for (var j = 0; j < cards.length; j++) {
-        if (cards[j] === el || cards[j].contains(el) || el.contains(cards[j])) {
-          overlaps = true;
-          break;
-        }
-      }
-      if (!overlaps) cards.push(el);
+    // Every accepted card and all of its ancestors: a later hit found in this
+    // set is equal to, or wraps, a card already taken.
+    var covered = new Set();
+    var chosen = new Set(cards);
+    function accept(card) {
+      chosen.add(card);
+      for (var up = card; up && !covered.has(up); up = up.parentElement) covered.add(up);
+    }
+    for (var i = 0; i < cards.length; i++) accept(cards[i]);
+
+    for (var j = 0; j < structural.length; j++) {
+      var el = structural[j];
+      if (covered.has(el) || insideAny(el, chosen)) continue;
+      cards.push(el);
+      accept(el);
     }
     return cards;
+  }
+
+  function insideAny(el, set) {
+    if (!set.size) return false;
+    for (var up = el.parentElement; up; up = up.parentElement) {
+      if (set.has(up)) return true;
+    }
+    return false;
   }
 
   /** @returns {HTMLElement[]} product cards currently rendered on the page. */
@@ -348,7 +358,10 @@
   }
 
   /** Money, including any "/lb"-style tail, for stripping out of raw text. */
-  var PRICE_TOKEN_RE = /[$€£]\s?[\d.,]+(?:\s*\/\s*[a-z ]{1,6})?/gi;
+  var PRICE_TOKEN_RE = new RegExp(
+    '[' + price.SYMBOL_CHARS + ']\\s?[\\d.,]+(?:\\s*/\\s*[a-z ]{1,6})?',
+    'gi'
+  );
 
   /**
    * The longest aria-label inside a card, which is the one describing the whole
@@ -393,7 +406,7 @@
     var link = card.querySelector('a[href]');
     if (link) candidates.push(spacedText(link));
 
-    for (var i = 0; i < candidates.length; i++) {
+    for (i = 0; i < candidates.length; i++) {
       if (candidates[i] && candidates[i].length >= 8) return candidates[i];
     }
     // Last resort: the raw card text. Money is stripped first so that a price
@@ -416,8 +429,11 @@
    * "current price Now $46.72, Was $51.97"; rejecting it outright threw away
    * the only node that contained the real price.
    */
-  var WAS_PRICE_RE =
-    /\b(?:was|list price|orig(?:inal)?\s*price|reg(?:ular)?\s*price|compare at)\b\s*:?\s*[$€£]\s?[\d.,]+/gi;
+  var WAS_PRICE_RE = new RegExp(
+    '\\b(?:was|list price|orig(?:inal)?\\s*price|reg(?:ular)?\\s*price|compare at)\\b\\s*:?\\s*' +
+      '[' + price.SYMBOL_CHARS + ']\\s?[\\d.,]+',
+    'gi'
+  );
 
   function stripWasPrices(text) {
     return String(text || '').replace(WAS_PRICE_RE, ' ');
@@ -583,7 +599,7 @@
 
       var wrapped = href.match(/[?&](?:adurl|url|q)=([^&]+)/);
       if (!wrapped) continue;
-      var inner = '';
+      var inner;
       try {
         inner = decodeURIComponent(wrapped[1]);
       } catch (e) {

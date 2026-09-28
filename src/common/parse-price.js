@@ -32,7 +32,10 @@
     '฿': 'THB'
   };
 
-  var SYMBOL_PATTERN = '(?:US\\s?\\$|CA\\s?\\$|NZ\\s?\\$|HK\\s?\\$|A\\s?\\$|R\\$|[$\u00a3\u20ac\u00a5\u20b9\u20a9\u20aa\u20ba\u20ab\u0e3f])';
+  /** Every currency symbol recognised anywhere; other modules build on this. */
+  var SYMBOL_CHARS = '$\u00a3\u20ac\u00a5\u20b9\u20a9\u20aa\u20ba\u20ab\u0e3f';
+
+  var SYMBOL_PATTERN = '(?:US\\s?\\$|CA\\s?\\$|NZ\\s?\\$|HK\\s?\\$|A\\s?\\$|R\\$|[' + SYMBOL_CHARS + '])';
   var CODE_PATTERN =
     '(?:USD|CAD|AUD|NZD|GBP|EUR|JPY|INR|MXN|BRL|CHF|SEK|NOK|DKK|PLN|ZAR|SGD|HKD|KRW)';
   var NUMBER_PATTERN = '\\d[\\d.,\\u00a0\u2009]*\\d|\\d';
@@ -66,12 +69,27 @@
   );
 
   /**
+   * Currencies where a lone "1.234" means one thousand two hundred and
+   * thirty-four: those written with a decimal comma, and those with no minor
+   * unit at all.
+   */
+  var DOT_GROUPING_CURRENCIES = {
+    EUR: true, BRL: true, TRY: true, DKK: true, NOK: true, SEK: true, PLN: true,
+    JPY: true, KRW: true, VND: true
+  };
+
+  /**
    * Convert a localised numeric string to a Number.
    *
    * The rule that resolves nearly every real case: whichever of "." or ","
    * appears LAST is the decimal separator, the other is a grouping separator.
+   * A single dot followed by exactly three digits is the one shape that rule
+   * cannot settle, so `currency` decides it.
+   *
+   * @param {string} str
+   * @param {string|null} [currency] ISO code the number is priced in
    */
-  function normalizeNumber(str) {
+  function normalizeNumber(str, currency) {
     var s = String(str).replace(/[\s\u00a0\u2009']/g, '');
     var lastComma = s.lastIndexOf(',');
     var lastDot = s.lastIndexOf('.');
@@ -89,6 +107,9 @@
     } else if (lastDot > -1) {
       // Multiple dots can only be grouping separators ("1.234.567").
       if ((s.match(/\./g) || []).length > 1) s = s.replace(/\./g, '');
+      else if (currency && DOT_GROUPING_CURRENCIES[currency] && /^\d{1,3}\.\d{3}$/.test(s)) {
+        s = s.replace('.', '');
+      }
     }
 
     value = parseFloat(s);
@@ -124,13 +145,14 @@
         continue;
       }
       var token = m[1] || m[4];
-      var amount = normalizeNumber(m[2] || m[3]);
+      var currency = currencyFor(token);
+      var amount = normalizeNumber(m[2] || m[3], currency);
       if (amount === null || amount <= 0 || amount > 1e7) continue;
 
       var tail = PER_UNIT_TAIL_RE.exec(text.slice(m.index + m[0].length));
       out.push({
         amount: amount,
-        currency: currencyFor(token),
+        currency: currency,
         raw: m[0].trim() + (tail ? tail[0].replace(/\s+/g, '') : ''),
         index: m.index,
         perUnit: tail ? describeUnit(tail[1]) : null
@@ -197,7 +219,8 @@
     parseUnitPrice: parseUnitPrice,
     parsePriceCandidates: parsePriceCandidates,
     looksLikePrice: looksLikePrice,
-    normalizeNumber: normalizeNumber
+    normalizeNumber: normalizeNumber,
+    SYMBOL_CHARS: SYMBOL_CHARS
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 

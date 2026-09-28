@@ -42,6 +42,23 @@ test('number normalisation', () => {
   assert.strictEqual(price.normalizeNumber('9.99'), 9.99);
 });
 
+test('a lone dot before three digits is grouping only where the currency says so', () => {
+  assert.strictEqual(price.normalizeNumber('1.234', 'EUR'), 1234);
+  assert.strictEqual(price.normalizeNumber('1.980', 'JPY'), 1980);
+  assert.strictEqual(price.normalizeNumber('1.234', 'USD'), 1.234);
+  assert.strictEqual(price.normalizeNumber('1.234'), 1.234);
+  assert.strictEqual(price.normalizeNumber('12.99', 'EUR'), 12.99);
+  assert.strictEqual(price.parsePrice('1.234 \u20ac').amount, 1234);
+});
+
+test('every recognised currency symbol is exported for the other parsers', () => {
+  for (const symbol of ['$', '\u00a3', '\u20ac', '\u00a5', '\u20b9', '\u20a9']) {
+    assert.ok(price.SYMBOL_CHARS.includes(symbol), symbol);
+  }
+  // Non-USD symbols are stripped from was-prices too, not only $ € £.
+  assert.strictEqual(adapter.stripWasPrices('Now \u00a5980, Was \u00a51,200').trim(), 'Now \u00a5980,');
+});
+
 test('shopping surface detection', () => {
   // Surface detection is host-aware now that several stores are supported, so
   // a path alone is not enough. Per-store URL coverage lives in sites.test.js;

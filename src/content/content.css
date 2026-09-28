@@ -37,7 +37,13 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  pointer-events: none;
+  /* The badge carries a `title` explaining which price and size were read and
+     how confident the parse was. With `pointer-events: none` that tooltip can
+     never be triggered, so every word of it was unreachable. The badge is a
+     small pill in one corner, so accepting hover here costs almost no click
+     area on the card beneath it. */
+  pointer-events: auto;
+  cursor: help;
   background: #f1f3f4;
   border-color: #dadce0;
   color: #3c4043;
@@ -82,9 +88,60 @@
   font-weight: 400;
 }
 
-.ppp-badge-flag {
+.ppp-badge-note {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-size: 10px;
+  color: #1967d2;
+}
+
+.ppp-badge-note:not(:empty)::after {
+  content: '\00b7';
+  margin: 0 2px 0 4px;
   font-weight: 400;
-  opacity: 0.85;
+}
+
+/* On a narrow card the labels give way and the price never does. "Best value"
+   yields first: the card's green outline already says it. */
+.ppp-badge-best,
+.ppp-badge-note {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ppp-badge-best {
+  flex-shrink: 4;
+}
+
+.ppp-badge-value,
+.ppp-badge-flag {
+  flex: none;
+}
+
+/* The best-value badge is solid green; blue text on it would be unreadable. */
+.ppp-badge[data-ppp-best='true'] .ppp-badge-note {
+  color: inherit;
+}
+
+/*
+ * Uncertainty mark. Drawn as a ring around the character rather than left as a
+ * loose "?" trailing the price, which read as part of the number.
+ */
+.ppp-badge-flag:not(:empty) {
+  display: inline-grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+  margin-left: 2px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0.8;
 }
 
 /*
@@ -157,6 +214,12 @@
     background: #1e8e3e;
     border-color: #1e8e3e;
     color: #fff;
+  }
+  .ppp-badge-note {
+    color: #8ab4f8;
+  }
+  .ppp-badge[data-ppp-best='true'] .ppp-badge-note {
+    color: inherit;
   }
   [data-ppp-card][data-ppp-best='true'],
   [data-ppp-card][data-ppp-best='true']:focus,

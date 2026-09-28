@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Unit Price Filter – Settings</title>
+  <link rel="icon" href="../../icons/icon-32.png">
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main class="page">
+    <header class="masthead">
+      <img src="../../icons/icon-48.png" width="40" height="40" alt="">
+      <div>
+        <h1>Unit Price Filter</h1>
+        <p class="lede">See what things really cost per pound, kilogram or litre on Google Shopping, Amazon and Walmart.</p>
+      </div>
+    </header>
+
+    <section class="card welcome" id="welcome" aria-labelledby="h-welcome" hidden>
+      <h2 id="h-welcome">You’re set up</h2>
+      <p>Search for something sold by weight or volume and every result gets a unit-price badge. Try one:</p>
+      <ul class="try">
+        <li><a href="https://www.google.com/search?q=coffee+beans&amp;udm=28" target="_blank" rel="noopener">Google Shopping</a></li>
+        <li><a href="https://www.amazon.com/s?k=coffee+beans" target="_blank" rel="noopener">Amazon</a></li>
+        <li><a href="https://www.walmart.com/search?q=coffee+beans" target="_blank" rel="noopener">Walmart</a></li>
+      </ul>
+      <p class="help">The panel on the results page explains what each badge means. You can come back here any time from the toolbar button’s right-click menu.</p>
+    </section>
+
+    <section class="card" aria-labelledby="h-filtering">
+      <h2 id="h-filtering">Filtering</h2>
+      <div class="row">
+        <label for="basis">Compare prices per</label>
+        <select id="basis"></select>
+      </div>
+      <label class="check">
+        <input type="checkbox" id="filterEnabled">
+        <span>Hide results above my limit<small>Price badges are shown either way.</small></span>
+      </label>
+      <label class="check">
+        <input type="checkbox" id="hideUnknown">
+        <span>Also hide items with no listed size<small>Off by default: the cheapest item may well be among them.</small></span>
+      </label>
+      <label class="check">
+        <input type="checkbox" id="hideOtherDimension">
+        <span>Also hide items measured the other way<small>For example, items sold by the litre while comparing per pound.</small></span>
+      </label>
+      <label class="check">
+        <input type="checkbox" id="sortByUnitPrice">
+        <span>Sort results by unit price<small>Cheapest first. Only the order you see changes; ads and banners stay put.</small></span>
+      </label>
+    </section>
+
+    <section class="card" aria-labelledby="h-limits">
+      <h2 id="h-limits">Price limits</h2>
+      <p class="help">Each currency keeps its own limit, so a limit in US dollars is never applied to Canadian dollars or pounds.</p>
+      <table class="limits" id="limits" aria-labelledby="h-limits" hidden>
+        <thead>
+          <tr><th scope="col">Currency</th><th scope="col">Maximum per unit</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
+        </thead>
+        <tbody id="limits-body"></tbody>
+      </table>
+      <p class="empty" id="limits-empty" hidden>No limits saved yet. Set one here or from the panel on any results page.</p>
+      <form class="add-limit" id="add-limit">
+        <label class="sr-only" for="add-currency">Currency</label>
+        <select id="add-currency"></select>
+        <label class="sr-only" for="add-amount">Maximum per unit</label>
+        <input id="add-amount" type="number" inputmode="decimal" min="0" step="0.01" placeholder="Limit" required>
+        <button type="submit" class="secondary">Add limit</button>
+      </form>
+    </section>
+
+    <section class="card" aria-labelledby="h-detection">
+      <h2 id="h-detection">Size detection</h2>
+      <div class="row">
+        <label for="minConfidence">How sure must a size be?</label>
+        <select id="minConfidence"></select>
+      </div>
+      <p class="help">Sizes read from product titles can be ambiguous. Stricter settings mark more of them as unknown instead of guessing.</p>
+    </section>
+
+    <section class="card" aria-labelledby="h-panel">
+      <h2 id="h-panel">Panel</h2>
+      <label class="check">
+        <input type="checkbox" id="panelVisible">
+        <span>Show the panel on results pages<small>The toolbar button shows and hides it too.</small></span>
+      </label>
+      <div class="row">
+        <label for="panelCorner">Position</label>
+        <select id="panelCorner"></select>
+      </div>
+      <p class="help">You can also drag the panel by its title bar; it snaps to the nearest corner.</p>
+      <div>
+        <button id="show-guide" type="button" class="secondary">Show the badge guide again</button>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="h-history">
+      <h2 id="h-history">Price history</h2>
+      <label class="check">
+        <input type="checkbox" id="rememberPrices">
+        <span>Remember the lowest price I’ve seen for each product<small>Marks a result “New low” when it beats every earlier sighting. Stored only on this computer and never sent anywhere.</small></span>
+      </label>
+      <div class="row">
+        <p class="help" id="history-count" aria-live="polite"></p>
+        <button id="clear-history" type="button" class="secondary">Clear history</button>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="h-advanced">
+      <h2 id="h-advanced">Advanced</h2>
+      <label class="check">
+        <input type="checkbox" id="debug">
+        <span>Outline detected product cards<small>Useful when reporting a result the extension missed.</small></span>
+      </label>
+    </section>
+
+    <footer class="actions">
+      <button id="reset" type="button" class="secondary">Reset to defaults</button>
+      <p class="status" id="status" role="status" aria-live="polite"></p>
+    </footer>
+  </main>
+
+  <script src="../common/units.js"></script>
+  <script src="../common/settings.js"></script>
+  <script src="../common/history.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

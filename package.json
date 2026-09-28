@@ -1,0 +1,22 @@
+{
+  "name": "unit-price-filter",
+  "version": "0.4.0",
+  "private": true,
+  "description": "Chrome extension that filters Google Shopping, Amazon and Walmart results by price per pound, kilogram, litre or fluid ounce.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": "^20.19.0 || ^22.13.0 || >=24"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check": "node tools/check.js",
+    "lint": "eslint .",
+    "fixture": "node tools/build-fixture.js",
+    "icons": "node tools/make-icons.js"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.10.0",
+    "globals": "17.12.0"
+  }
+}

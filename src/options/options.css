@@ -1,0 +1,311 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f8f9fa;
+  --surface: #fff;
+  --border: #dadce0;
+  --text: #202124;
+  --muted: #5f6368;
+  --accent: #1e8e3e;
+  --focus: #1a73e8;
+  --link: #1a73e8;
+  --danger: #b3261e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #202124;
+    --surface: #292a2d;
+    --border: #5f6368;
+    --text: #e8eaed;
+    --muted: #9aa0a6;
+    --accent: #81c995;
+    --focus: #8ab4f8;
+    --link: #8ab4f8;
+    --danger: #f28b82;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 400 14px/1.5 Roboto, system-ui, -apple-system, 'Segoe UI', Arial, sans-serif;
+}
+
+.page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.masthead {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 8px;
+}
+
+.masthead img {
+  flex: none;
+  border-radius: 10px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.lede {
+  margin: 2px 0 0;
+  color: var(--muted);
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.help,
+.empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.welcome {
+  border-color: var(--accent);
+}
+
+.welcome p {
+  margin: 0;
+}
+
+.try {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.try a {
+  display: inline-block;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--link);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.try a:hover {
+  border-color: var(--link);
+}
+
+.try a:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+select,
+input[type='number'],
+button {
+  font: inherit;
+  color: inherit;
+}
+
+select,
+input[type='number'] {
+  height: 34px;
+  padding: 0 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+select:focus-visible,
+input:focus-visible,
+button:focus-visible,
+.money:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+[aria-invalid='true'] {
+  border-color: var(--danger) !important;
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.check input {
+  margin: 3px 0 0;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  flex: none;
+}
+
+.check small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.limits {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.limits th,
+.limits td {
+  padding: 8px 0;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.limits thead th {
+  padding-top: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.limits tbody th {
+  font-weight: 400;
+}
+
+.limits td:last-child {
+  text-align: right;
+}
+
+.code {
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.name {
+  color: var(--muted);
+}
+
+.money {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.money input {
+  width: 96px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  outline: none;
+}
+
+.money .prefix {
+  color: var(--muted);
+}
+
+.add-limit {
+  display: flex;
+  gap: 8px;
+}
+
+.add-limit input {
+  width: 110px;
+}
+
+button.secondary {
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+button.secondary:hover {
+  border-color: var(--muted);
+}
+
+button.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--link);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.status {
+  margin: 0;
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

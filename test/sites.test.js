@@ -97,3 +97,17 @@ test('a missing location never throws', () => {
   assert.strictEqual(sites.forLocation(null).id, 'generic');
   assert.strictEqual(sites.isResultsPage(null), false);
 });
+
+test('page currency: country host, then observed prices, then USD', () => {
+  const at = (href, observed) => sites.currencyFor(loc(href), observed || null);
+  // A bare "$" on amazon.ca is Canadian, whatever the cards parsed as.
+  assert.strictEqual(at('https://www.amazon.ca/s?k=x', 'USD'), 'CAD');
+  assert.strictEqual(at('https://www.walmart.ca/search?q=x'), 'CAD');
+  assert.strictEqual(at('https://www.amazon.co.uk/s?k=x'), 'GBP');
+  assert.strictEqual(at('https://www.amazon.com.au/s?k=x'), 'AUD');
+  // .com storefronts serve other currencies to travellers.
+  assert.strictEqual(at('https://www.google.com/search?udm=28', 'EUR'), 'EUR');
+  // Nothing observed: known stores still get a currency to save limits under.
+  assert.strictEqual(at('https://www.amazon.com/s?k=x'), 'USD');
+  assert.strictEqual(at('https://example.com/'), null);
+});

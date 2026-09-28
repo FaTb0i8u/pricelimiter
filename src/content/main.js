@@ -2,9 +2,10 @@
  * Content-script entry point: scan -> analyse -> annotate -> filter.
  *
  * Everything this file writes to the store's DOM is additive and reversible: a
- * `data-ppp-*` attribute, one absolutely-positioned badge element per card, and
- * (only when the card is statically positioned) `position: relative`. Calling
- * `reset()` removes all of it.
+ * `data-ppp-*` attribute, one absolutely-positioned badge element per card,
+ * (only when the card is statically positioned) `position: relative`, and
+ * (only while sorting) an inline CSS `order`. Calling `reset()` removes all of
+ * it.
  */
 ;(function (root) {
   'use strict';
@@ -16,19 +17,18 @@
   var adapter = PPP.adapter;
   var quantity = PPP.quantity;
   var settingsApi = PPP.settings;
-  var BASES = PPP.units.BASES;
-
-  var CURRENCY_SYMBOLS = {
-    USD: '$', CAD: '$', AUD: '$', NZD: '$', SGD: '$', HKD: '$',
-    GBP: '\u00a3', EUR: '\u20ac', JPY: '\u00a5', INR: '\u20b9',
-    KRW: '\u20a9', BRL: 'R$', MXN: '$', CHF: 'CHF', SEK: 'kr',
-    NOK: 'kr', DKK: 'kr', PLN: 'z\u0142', ZAR: 'R'
-  };
+  var verdicts = PPP.verdict;
+  var sites = PPP.sites;
+  var historyApi = PPP.history;
 
   var RESCAN_DEBOUNCE_MS = 300;
   var MAX_DETAIL_LOOKUPS = 8;
+  var DETAIL_LOOKUP_CONCURRENCY = 3;
   /** Kept in step with the ppp-flash animation in content.css. */
   var FLASH_DURATION_MS = 1600;
+  /** How far above a card to look for the flex/grid item that can be reordered. */
+  var MAX_SORT_ASCENT = 6;
+  var HISTORY_FLUSH_MS = 1500;
 
   var state = {
     settings: null,
@@ -43,9 +43,14 @@
     currency: null,
     detailLookupBusy: false,
     lastStats: null,
-    // Set once per scan cycle when the URL test fails but the page turns out
-    // to hold a results grid anyway. See looksLikeResultsByContent().
-    contentActive: false
+    // Set by each scan when the URL test fails but the page turns out to hold
+    // a results grid anyway. See scan().
+    contentActive: false,
+    // History as it stood before this page, so a price seen here cannot be
+    // compared with itself. Null while loading or when switched off.
+    priceHistory: null,
+    pendingPrices: new Map(),
+    historyTimer: null
   };
 
   /** Per-element memo of the expensive parse work. */
@@ -56,15 +61,32 @@
 
   /* ---------------------------------------------------------------- analyse */
 
+  /**
+   * A cheap fingerprint of what the analysis reads, so an unchanged card costs
+   * one native `textContent` rather than three tree walks. The badge's own text
+   * is removed, or every change of basis would look like a new product.
+   */
+  function cardSignature(card) {
+    var text = card.textContent || '';
+    var badge = card.querySelector(':scope > .ppp-badge');
+    if (badge) {
+      var own = badge.textContent;
+      var at = own ? text.lastIndexOf(own) : -1;
+      if (at > -1) text = text.slice(0, at) + text.slice(at + own.length);
+    }
+    var link = card.querySelector('a[href]');
+    return text + '|' + (card.getAttribute('aria-label') || '') + '|' +
+      (link ? link.getAttribute('href') : '');
+  }
+
   function analyzeCard(card) {
+    var signature = cardSignature(card);
+    var cached = analysisCache.get(card);
+    if (cached && cached.signature === signature) return cached.data;
+
     var title = adapter.extractTitle(card);
     var priceInfo = adapter.extractPrice(card);
     var unitPriceInfo = adapter.extractUnitPrice(card);
-    var signature =
-      title + '|' + (priceInfo ? priceInfo.raw : '') + '|' + (unitPriceInfo ? unitPriceInfo.raw : '');
-
-    var cached = analysisCache.get(card);
-    if (cached && cached.signature === signature) return cached.data;
 
     var sizeText = adapter.extractSizeText(card, title);
     var parsed = quantity.parseQuantity(sizeText.primary);
@@ -101,139 +123,151 @@
       quantity: parsed,
       quantitySource: quantitySource,
       pricePerCanonical:
-        priceInfo && parsed && parsed.amount > 0 ? priceInfo.amount / parsed.amount : null
+        priceInfo && parsed && parsed.amount > 0 ? priceInfo.amount / parsed.amount : null,
+      // Only unsized cards are candidates for a product-page lookup.
+      productUrl: parsed ? '' : adapter.extractProductUrl(card)
     };
 
     analysisCache.set(card, { signature: signature, data: data });
     return data;
   }
 
+  /* ----------------------------------------------------------------- layout */
+
   /**
-   * Classify one card against the current settings.
-   * `pass`    - priced, in the selected dimension, at or under the threshold
-   * `fail`    - priced, in the selected dimension, over the threshold
-   * `na`      - priced, but sold in the other dimension (weight vs volume)
-   * `unknown` - no usable price or no trustworthy size
+   * Give each new card a containing block for its badge. Every read happens
+   * before any write, so a page of 150 cards lays out once rather than 150
+   * times.
    */
-  function evaluate(data, settings) {
-    var base = BASES[settings.basis] || BASES.lb;
-
-    // The store's own unit price is preferred - it is declared rather than
-    // inferred - but ONLY when it can actually be compared with the threshold.
-    //
-    // It often cannot. Google prints "$1.67/ct" (per capsule, per serving) on a
-    // large share of its tiles, and a per-item price has no relationship to a
-    // per-pound limit. Treating that as the final answer marked the card
-    // `unknown` and stopped there, even when its own title said "5 lb" - so the
-    // card was never filtered and whole sections looked ignored. Measured on a
-    // live results page, 82 of 161 cards ended up unsized this way.
-    //
-    // So a declared price that cannot be compared no longer ends the
-    // evaluation: the title-derived size is tried next, and the declared value
-    // is only reported when nothing comparable was found.
-    var declared = evaluateDeclared(data, base, settings);
-    if (declared && declared.state !== 'unknown' && declared.state !== 'na') return declared;
-
-    var inferred = evaluateInferred(data, base, settings);
-    if (inferred.state !== 'unknown' && inferred.state !== 'na') return inferred;
-
-    // Nothing was directly comparable. A declared "sold by the other dimension"
-    // reading still beats a guess, so it wins over the inferred equivalent.
-    if (declared && declared.state === 'na') return declared;
-    if (inferred.state === 'na') return inferred;
-    return declared || inferred;
+  function patchPositions(cards) {
+    var pending = [];
+    var i;
+    for (i = 0; i < cards.length; i++) {
+      if (positionPatched.has(cards[i])) continue;
+      positionPatched.add(cards[i]);
+      if (window.getComputedStyle(cards[i]).position === 'static') pending.push(cards[i]);
+    }
+    for (i = 0; i < pending.length; i++) {
+      pending[i].style.position = 'relative';
+      pending[i].setAttribute('data-ppp-pos', 'patched');
+    }
   }
 
-  /** Verdict from the merchant's own unit price, or null if it printed none. */
-  function evaluateDeclared(data, base, settings) {
-    var declared = data.unitPrice;
-    if (!declared || !declared.perUnit) return null;
-
-    if (declared.perUnit.dimension === 'count') {
-      // A per-item price cannot be compared with a per-pound threshold.
-      return { state: 'unknown', reason: 'per ' + declared.perUnit.label, source: 'site' };
-    }
-    var perCanonical = declared.amount / declared.perUnit.factor;
-    if (declared.perUnit.dimension !== base.dimension) {
-      var other = declared.perUnit.dimension === 'mass' ? BASES.lb : BASES.l;
-      return {
-        state: 'na',
-        altBase: other,
-        unitPrice: perCanonical * other.perBase,
-        source: 'site'
-      };
-    }
-    var declaredUnitPrice = perCanonical * base.perBase;
-    return {
-      state: declaredUnitPrice <= settings.threshold ? 'pass' : 'fail',
-      unitPrice: declaredUnitPrice,
-      base: base,
-      source: 'site'
-    };
+  function displayOf(el) {
+    return window.getComputedStyle(el).display;
   }
 
-  /** Verdict from the item price divided by a size parsed from the title. */
-  function evaluateInferred(data, base, settings) {
-    if (!data.price) return { state: 'unknown', reason: 'no price' };
-    if (!data.quantity || data.pricePerCanonical === null) {
-      return { state: 'unknown', reason: 'no size' };
-    }
-    if (data.quantity.confidence < settings.minConfidence) {
-      return { state: 'unknown', reason: 'size unclear' };
-    }
+  /**
+   * The nearest ancestor that generates a box. Google wraps organic tiles in
+   * `display: contents` layers, which are invisible to layout: `order` set on
+   * one does nothing, and its children are the real flex items.
+   */
+  function layoutParent(el) {
+    var parent = el.parentElement;
+    while (parent && displayOf(parent) === 'contents') parent = parent.parentElement;
+    return parent;
+  }
 
-    if (data.quantity.dimension !== base.dimension) {
-      var altBase = data.quantity.dimension === 'mass' ? BASES.lb : BASES.l;
-      return {
-        state: 'na',
-        altBase: altBase,
-        unitPrice: data.pricePerCanonical * altBase.perBase,
-        source: data.quantitySource || 'title'
-      };
+  /** A container's flex or grid items, looking through `display: contents`. */
+  function layoutItems(container) {
+    var out = [];
+    for (var i = 0; i < container.children.length; i++) {
+      var child = container.children[i];
+      if (displayOf(child) === 'contents') out.push.apply(out, layoutItems(child));
+      else out.push(child);
     }
+    return out;
+  }
 
-    var unitPrice = data.pricePerCanonical * base.perBase;
-    return {
-      state: unitPrice <= settings.threshold ? 'pass' : 'fail',
-      unitPrice: unitPrice,
-      base: base,
-      source: data.quantitySource || 'title'
-    };
+  /**
+   * The element to reorder for a card: the card itself or the nearest
+   * box-generating ancestor that is an item of a flex or grid container with
+   * siblings, since CSS `order` affects nothing else.
+   */
+  function sortItemFor(card) {
+    var el = card;
+    for (var i = 0; i < MAX_SORT_ASCENT && el; i++) {
+      var container = layoutParent(el);
+      if (!container) return null;
+      if (/flex|grid/.test(displayOf(container)) && layoutItems(container).length > 1) {
+        return { item: el, container: container };
+      }
+      el = container;
+    }
+    return null;
+  }
+
+  /**
+   * Every layout read sorting needs, done up front so applySort() only writes.
+   * @returns {Map<Element, {items: Element[], entries: Array<{item: Element, index: number}>}>}
+   */
+  function planSort(cards) {
+    var groups = new Map();
+    var claimed = new Set();
+    for (var i = 0; i < cards.length; i++) {
+      var found = sortItemFor(cards[i]);
+      if (!found || claimed.has(found.item)) continue;
+      claimed.add(found.item);
+      if (!groups.has(found.container)) {
+        groups.set(found.container, { items: layoutItems(found.container), entries: [] });
+      }
+      groups.get(found.container).entries.push({ item: found.item, index: i });
+    }
+    return groups;
+  }
+
+  function setOrder(el, value) {
+    if (!el.hasAttribute('data-ppp-order')) el.setAttribute('data-ppp-order', el.style.order || '');
+    el.style.order = String(value);
+  }
+
+  function clearSort() {
+    var ordered = document.querySelectorAll('[data-ppp-order]');
+    for (var i = 0; i < ordered.length; i++) {
+      ordered[i].style.order = ordered[i].getAttribute('data-ppp-order');
+      ordered[i].removeAttribute('data-ppp-order');
+    }
+  }
+
+  /**
+   * Reorder cards by unit price using CSS `order` rather than moving nodes.
+   * The stores render with React and similar frameworks, which break when
+   * their nodes are moved behind their back; `order` is purely visual and
+   * fully reversible.
+   *
+   * Cards are permuted only among the slots cards already occupy, so banners
+   * and ads between them stay where the store put them.
+   *
+   * @returns {number} how many containers were reordered
+   */
+  function applySort(groups, cardVerdicts) {
+    var sorted = 0;
+    groups.forEach(function (group) {
+      var entries = group.entries;
+      if (entries.length < 2) return;
+      var items = group.items;
+      var slotOf = new Map();
+      var s;
+      for (s = 0; s < items.length; s++) slotOf.set(items[s], s);
+
+      var slots = entries.map(function (e) { return slotOf.get(e.item); }).sort(function (a, b) { return a - b; });
+      var ranked = entries.slice().sort(function (a, b) {
+        return verdicts.compareVerdicts(cardVerdicts[a.index], cardVerdicts[b.index]) ||
+          slotOf.get(a.item) - slotOf.get(b.item);
+      });
+
+      for (s = 0; s < items.length; s++) setOrder(items[s], s);
+      for (s = 0; s < ranked.length; s++) setOrder(ranked[s].item, slots[s]);
+      sorted++;
+    });
+    return sorted;
   }
 
   /* ----------------------------------------------------------------- render */
 
-  function formatMoney(value) {
-    if (!isFinite(value)) return '';
-    if (value >= 1000) return String(Math.round(value));
-    if (value >= 100) return value.toFixed(1);
-    return value.toFixed(2);
-  }
-
-  function badgeText(verdict, data, symbol) {
-    if (verdict.state === 'unknown') {
-      // A merchant per-item price is still worth showing even though it cannot
-      // be compared against a per-weight threshold.
-      if (verdict.source === 'site' && data.unitPrice && data.unitPrice.perUnit) {
-        return symbol + formatMoney(data.unitPrice.amount) + '/' + data.unitPrice.perUnit.label;
-      }
-      return verdict.reason || 'no size';
-    }
-    var base = verdict.base || verdict.altBase;
-    return symbol + formatMoney(verdict.unitPrice) + '/' + base.label;
-  }
-
   function ensureBadge(card) {
     var badge = card.querySelector(':scope > .ppp-badge');
     if (badge) return badge;
-
-    if (!positionPatched.has(card)) {
-      positionPatched.add(card);
-      if (window.getComputedStyle(card).position === 'static') {
-        card.style.position = 'relative';
-        card.setAttribute('data-ppp-pos', 'patched');
-      }
-    }
 
     badge = document.createElement('span');
     badge.className = 'ppp-badge';
@@ -245,6 +279,10 @@
     var best = document.createElement('span');
     best.className = 'ppp-badge-best';
     badge.appendChild(best);
+
+    var note = document.createElement('span');
+    note.className = 'ppp-badge-note';
+    badge.appendChild(note);
 
     var value = document.createElement('span');
     value.className = 'ppp-badge-value';
@@ -270,7 +308,9 @@
     if (!badge) return;
     badge.setAttribute('data-ppp-best', 'true');
     var label = badge.querySelector('.ppp-badge-best');
-    if (label) label.textContent = 'Best value';
+    var note = badge.querySelector('.ppp-badge-note');
+    // Shortened beside "New low" so both fit a narrow card without truncating.
+    if (label) label.textContent = note && note.textContent ? 'Best' : 'Best value';
   }
 
   function clearBest(card) {
@@ -287,24 +327,19 @@
     if (label) label.textContent = '';
   }
 
-  function decorate(card, data, verdict, settings, symbol) {
+  function decorate(card, data, verdict, settings, currency, past) {
     var badge = ensureBadge(card);
     var value = badge.querySelector('.ppp-badge-value');
     var flag = badge.querySelector('.ppp-badge-flag');
+    var note = badge.querySelector('.ppp-badge-note');
 
-    value.textContent = badgeText(verdict, data, symbol);
-
-    // A merchant-declared unit price is never uncertain; only inferred ones are.
-    var uncertain =
-      verdict.source !== 'site' &&
-      data.quantity &&
-      (data.quantity.confidence < 0.6 ||
-        data.quantity.flags.indexOf('pack-ambiguous') > -1);
-    flag.textContent = verdict.state === 'unknown' || !uncertain ? '' : '\u00a0?';
+    value.textContent = verdicts.badgeText(verdict, data, currency);
+    flag.textContent = verdicts.isUncertain(verdict, data) ? '?' : '';
+    note.textContent = past && past.isNewLow ? 'New low' : '';
 
     badge.setAttribute('data-ppp-state', verdict.state);
     clearBest(card); // re-awarded below, once per scan
-    badge.title = buildTooltip(data, verdict);
+    badge.title = buildTooltip(data, verdict, past);
 
     card.setAttribute('data-ppp-card', '');
     card.setAttribute('data-ppp-state', verdict.state);
@@ -323,7 +358,7 @@
     return hidden;
   }
 
-  function buildTooltip(data, verdict) {
+  function buildTooltip(data, verdict, past) {
     var lines = [];
     if (verdict.source === 'site') {
       lines.push('Unit price listed by the merchant: ' + data.unitPrice.raw);
@@ -348,7 +383,66 @@
     } else if (verdict.reason) {
       lines.push('Skipped: ' + verdict.reason);
     }
+    if (past) {
+      lines.push(
+        (past.isNewLow ? 'New low. Previous lowest you\u2019ve seen: ' : 'Lowest you\u2019ve seen: ') +
+          past.lowestLabel + ' (' + past.site + ', ' + historyApi.describeAge(past.since, Date.now()) + ')'
+      );
+    }
     return lines.join('\n');
+  }
+
+  /* ---------------------------------------------------------------- history */
+
+  /** Reload the stored history, or drop it when the user has switched it off. */
+  function refreshHistory() {
+    if (!state.settings || !state.settings.rememberPrices) {
+      state.priceHistory = null;
+      state.pendingPrices.clear();
+      classify();
+      return Promise.resolve();
+    }
+    return historyApi.load().then(function (store) {
+      state.priceHistory = store;
+      classify();
+    });
+  }
+
+  function flushHistory() {
+    if (state.historyTimer) {
+      clearTimeout(state.historyTimer);
+      state.historyTimer = null;
+    }
+    if (!state.pendingPrices.size) return Promise.resolve();
+    var observations = Array.from(state.pendingPrices.values());
+    state.pendingPrices.clear();
+    return historyApi.record(observations);
+  }
+
+  /**
+   * Compare one card with what was seen before, and queue it to be remembered.
+   * Guessed sizes are left out entirely: one misread pack size stored as a
+   * record low would make every later sighting of that product look dear.
+   */
+  function historyFor(data, verdict, currency) {
+    if (!state.priceHistory || verdicts.isUncertain(verdict, data)) return null;
+    var canonical = verdicts.canonicalPrice(verdict);
+    if (!canonical) return null;
+    var key = historyApi.keyFor(data.title, currency, canonical.dimension);
+    if (!key) return null;
+
+    var queued = state.pendingPrices.get(key);
+    if (!queued || canonical.value < queued.price) {
+      state.pendingPrices.set(key, { key: key, price: canonical.value, site: adapter.currentSite().label });
+      if (!state.historyTimer) state.historyTimer = setTimeout(flushHistory, HISTORY_FLUSH_MS);
+    }
+
+    var past = historyApi.compare(state.priceHistory[key], canonical.value);
+    if (past) {
+      past.lowestLabel =
+        verdicts.formatMoney(past.lowest * canonical.base.perBase, currency) + '/' + canonical.base.label;
+    }
+    return past;
   }
 
   function dominantCurrency(analyses) {
@@ -363,18 +457,13 @@
     return best;
   }
 
-  /** Resolve ambiguous "$" values from the supported storefront's locale. */
   function pageCurrency(analyses) {
-    var host = location.hostname.toLowerCase();
-    if (/(^|\.)amazon\.co\.uk$/.test(host)) return 'GBP';
-    if (/(^|\.)(amazon|walmart)\.ca$/.test(host)) return 'CAD';
-    if (/(^|\.)amazon\.com\.au$/.test(host)) return 'AUD';
-    return dominantCurrency(analyses);
+    return sites.currencyFor(location, dominantCurrency(analyses));
   }
 
   /* ------------------------------------------------------------------- scan */
 
-  var EMPTY_STATS = { total: 0, shown: 0, priced: 0, unknown: 0, best: null, currencySymbol: '$', hint: '' };
+  var EMPTY_STATS = { total: 0, shown: 0, priced: 0, unknown: 0, best: null, currencySymbol: '', hint: '' };
 
   /**
    * Settings as the panel should see them. Dormancy (not on a Shopping page)
@@ -394,6 +483,14 @@
     if (state.panel && state.settings) state.panel.render(panelView(), stats);
   }
 
+  /**
+   * How many cards must be on the page before content alone is enough to
+   * activate. A genuine results grid has dozens; a stray price or two on an
+   * article or a product page must not be mistaken for one.
+   */
+  var MIN_CARDS_TO_AUTO_ACTIVATE = 5;
+
+  /** Find the page's cards, then classify them. */
   function scan() {
     if (!state.settings) return;
 
@@ -406,24 +503,67 @@
     unhideAll();
 
     var cards = adapter.findCards();
+
+    // Activation fallback for when the URL test says no but the page plainly
+    // is a results grid. Stores change their results URLs without notice -
+    // Google alone has moved between `tbm=shop` and `udm=28` - and a URL-only
+    // test then leaves the extension dormant and invisible. Restricted to
+    // hosts we have a profile for, so an unknown site never auto-activates on
+    // the strength of a few prices.
+    var byUrl = state.forced || adapter.isShoppingSurface();
+    state.contentActive = !byUrl && adapter.currentSite().id !== 'generic' &&
+      cards.length >= MIN_CARDS_TO_AUTO_ACTIVATE;
+
+    if (!isActive()) {
+      reset();
+      state.lastStats = EMPTY_STATS;
+      renderPanel(EMPTY_STATS);
+      return;
+    }
+    state.cards = cards;
+    classify();
+  }
+
+  /**
+   * Re-evaluate the cards already found. Settings changes land here rather
+   * than in scan(): a new threshold cannot change which cards exist, only how
+   * they are judged, so re-walking the document for it was wasted work on
+   * every keystroke.
+   */
+  function classify() {
+    if (!state.settings) return;
+    if (!isActive()) {
+      renderPanel(EMPTY_STATS);
+      return;
+    }
+
+    var cards = state.cards.filter(function (card) { return card.isConnected; });
     state.cards = cards;
 
-    var analyses = [];
-    var i;
-    for (i = 0; i < cards.length; i++) analyses.push(analyzeCard(cards[i]));
-
+    var analyses = cards.map(analyzeCard);
     var currency = pageCurrency(analyses);
-    var symbol = (currency && CURRENCY_SYMBOLS[currency]) || '$';
     var pageSettings = settingsApi.withCurrency(state.settings, currency);
     state.currency = currency;
+    var cardVerdicts = analyses.map(function (data) {
+      return verdicts.evaluate(data, pageSettings);
+    });
+    var histories = analyses.map(function (data, index) {
+      return historyFor(data, cardVerdicts[index], currency);
+    });
 
-    var stats = { total: cards.length, shown: 0, priced: 0, unknown: 0, best: null };
+    // Layout reads, all before the first write below.
+    var sortPlan = pageSettings.sortByUnitPrice ? planSort(cards) : null;
+    patchPositions(cards);
+
+    var stats = { total: cards.length, shown: 0, priced: 0, unknown: 0, newLows: 0, best: null };
     var bestVerdict = null;
+    var i;
     state.bestCard = null;
 
     for (i = 0; i < cards.length; i++) {
-      var verdict = evaluate(analyses[i], pageSettings);
-      var hidden = decorate(cards[i], analyses[i], verdict, pageSettings, symbol);
+      var verdict = cardVerdicts[i];
+      var hidden = decorate(cards[i], analyses[i], verdict, pageSettings, currency, histories[i]);
+      if (histories[i] && histories[i].isNewLow) stats.newLows++;
 
       if (!hidden) stats.shown++;
       if (verdict.state === 'unknown') stats.unknown++;
@@ -441,20 +581,25 @@
     if (bestVerdict && state.bestCard) {
       markBest(state.bestCard);
       stats.best = {
-        label: symbol + formatMoney(bestVerdict.unitPrice) + '/' + bestVerdict.base.label
+        label: verdicts.formatMoney(bestVerdict.unitPrice, currency) + '/' + bestVerdict.base.label
       };
     }
 
-    stats.currencySymbol = symbol;
-    stats.hint = adapter.isShoppingSurface()
-      ? ''
-      : 'Not a recognised results page \u2013 results may be mixed.';
+    clearSort();
+    var sortedGroups = sortPlan ? applySort(sortPlan, cardVerdicts) : 0;
+
+    stats.currencySymbol = verdicts.currencySymbol(currency);
+    if (sortPlan && !sortedGroups && cards.length > 1) {
+      stats.hint = 'This page\u2019s layout can\u2019t be reordered.';
+    } else if (!adapter.isShoppingSurface()) {
+      stats.hint = 'Not a recognised results page \u2013 results may be mixed.';
+    } else {
+      stats.hint = '';
+    }
 
     var lookupCount = 0;
     for (i = 0; i < cards.length; i++) {
-      if (!analyses[i].quantity && !detailAttempts.has(cards[i]) && adapter.extractProductUrl(cards[i])) {
-        lookupCount++;
-      }
+      if (analyses[i].productUrl && !detailAttempts.has(cards[i])) lookupCount++;
     }
     if (lookupCount || state.detailLookupBusy) {
       stats.detailLookup = { count: Math.min(lookupCount, MAX_DETAIL_LOOKUPS), busy: state.detailLookupBusy };
@@ -474,6 +619,7 @@
   /** Remove every trace of the extension from the page. */
   function reset() {
     unhideAll();
+    clearSort();
     if (state.flashTimer) {
       clearTimeout(state.flashTimer);
       state.flashTimer = null;
@@ -504,20 +650,12 @@
       if (location.href !== state.lastUrl) {
         state.lastUrl = location.href;
         analysisCache = new WeakMap();
-        state.contentActive = false;
         // The toolbar override is an escape hatch for an unrecognised search
         // URL, not permission to annotate every subsequent SPA route.
         state.forced = false;
         reset();
-      }
-      // Only pay for the content probe when the cheap tests have already
-      // failed, so ordinary results pages scan exactly once as before.
-      state.contentActive =
-        !state.forced && !adapter.isShoppingSurface() ? looksLikeResultsByContent() : false;
-      if (!isActive()) {
-        reset();
-        renderPanel(EMPTY_STATS);
-        return;
+        // Products from the page just left become history for this one.
+        flushHistory().then(refreshHistory);
       }
       if (typeof requestIdleCallback === 'function') {
         requestIdleCallback(scan, { timeout: 500 });
@@ -568,47 +706,33 @@
 
   /* ------------------------------------------------------------------- glue */
 
-  /**
-   * How many cards must be on the page before content alone is enough to
-   * activate. A genuine results grid has dozens; a stray price or two on an
-   * article or a product page must not be mistaken for one.
-   */
-  var MIN_CARDS_TO_AUTO_ACTIVATE = 5;
-
-  /**
-   * Activation fallback for when the URL test says no but the page plainly is
-   * a results grid.
-   *
-   * Stores change their results URLs without notice - Google alone has moved
-   * between `tbm=shop` and `udm=28` - and when that happens a URL-only test
-   * leaves the extension mounted, dormant and completely invisible, with no
-   * hint to the user that anything is wrong. Believing the DOM as well as the
-   * URL means a parameter rename degrades to "still works" instead of
-   * "silently does nothing".
-   *
-   * Restricted to hosts we have a profile for, so an unknown site can never
-   * auto-activate on the strength of a few prices.
-   */
-  function looksLikeResultsByContent() {
-    if (adapter.currentSite().id === 'generic') return false;
-    return adapter.findCards().length >= MIN_CARDS_TO_AUTO_ACTIVATE;
-  }
-
   function isActive() {
     return state.forced || adapter.isShoppingSurface() || state.contentActive;
   }
 
   function applySettings(patch) {
-    if (Object.prototype.hasOwnProperty.call(patch, 'threshold')) {
-      state.settings = settingsApi.setThreshold(state.settings, state.currency, patch.threshold);
-      delete patch.threshold;
+    var wasRemembering = state.settings.rememberPrices;
+    // Copied because the panel may still hold this object in its debounce.
+    var changes = Object.assign({}, patch);
+    if (Object.prototype.hasOwnProperty.call(changes, 'threshold')) {
+      state.settings = settingsApi.setThreshold(state.settings, state.currency, changes.threshold);
+      delete changes.threshold;
     }
-    Object.keys(patch).forEach(function (key) {
-      state.settings[key] = patch[key];
+    Object.keys(changes).forEach(function (key) {
+      state.settings[key] = changes[key];
     });
     state.settings = settingsApi.sanitize(state.settings);
     settingsApi.save(state.settings);
-    scan();
+    if (state.settings.rememberPrices !== wasRemembering) refreshHistory();
+    else classify();
+  }
+
+  function openOptions() {
+    if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.sendMessage) return;
+    // Content scripts cannot call openOptionsPage() themselves.
+    chrome.runtime.sendMessage({ type: 'ppp:open-options' }, function () {
+      void chrome.runtime.lastError;
+    });
   }
 
   function requestProductPage(url) {
@@ -671,38 +795,52 @@
     return candidates;
   }
 
+  /** Fetch one card's product page and keep the first explicit size it declares. */
+  async function lookUpPackageSize(candidate) {
+    detailAttempts.add(candidate.card);
+    var html = await requestProductPage(candidate.url);
+    if (!html) return;
+    var values = detailSizeCandidates(html);
+    for (var k = 0; k < values.length; k++) {
+      var parsed = quantity.parseQuantity(values[k]);
+      if (!parsed) continue;
+      parsed.confidence = Math.min(parsed.confidence, 0.75);
+      parsed.flags = parsed.flags.concat(['product-detail']);
+      detailQuantities.set(candidate.card, parsed);
+      analysisCache.delete(candidate.card);
+      return;
+    }
+  }
+
   async function findPackageSizes() {
     if (state.detailLookupBusy) return;
-    var candidates = [];
-    for (var i = 0; i < state.cards.length && candidates.length < MAX_DETAIL_LOOKUPS; i++) {
+    var queue = [];
+    for (var i = 0; i < state.cards.length && queue.length < MAX_DETAIL_LOOKUPS; i++) {
       var card = state.cards[i];
       var data = analyzeCard(card);
-      if (data.quantity || detailAttempts.has(card)) continue;
-      var url = adapter.extractProductUrl(card);
-      if (url) candidates.push({ card: card, url: url });
+      if (data.productUrl && !detailAttempts.has(card)) queue.push({ card: card, url: data.productUrl });
     }
-    if (!candidates.length) return;
+    if (!queue.length) return;
+
+    async function worker() {
+      while (queue.length) await lookUpPackageSize(queue.shift());
+    }
 
     state.detailLookupBusy = true;
-    renderPanel(state.lastStats || EMPTY_STATS);
-    for (var j = 0; j < candidates.length; j++) {
-       var candidate = candidates[j];
-       detailAttempts.add(candidate.card);
-       var html = await requestProductPage(candidate.url);
-       if (!html) continue;
-       var values = detailSizeCandidates(html);
-       for (var k = 0; k < values.length; k++) {
-         var parsed = quantity.parseQuantity(values[k]);
-         if (!parsed) continue;
-         parsed.confidence = Math.min(parsed.confidence, 0.75);
-         parsed.flags = parsed.flags.concat(['product-detail']);
-         detailQuantities.set(candidate.card, parsed);
-         analysisCache.delete(candidate.card);
-         break;
-       }
+    // classify() rather than re-rendering the last stats, which predate the
+    // busy flag and would leave the button enabled mid-lookup.
+    classify();
+    try {
+      var workers = [];
+      for (var w = 0; w < DETAIL_LOOKUP_CONCURRENCY; w++) workers.push(worker());
+      await Promise.all(workers);
+    } finally {
+      // A throw anywhere above would otherwise leave the flag set, and the
+      // panel would stay on "Looking for package sizes..." with the button
+      // disabled for the rest of the page's life.
+      state.detailLookupBusy = false;
     }
-    state.detailLookupBusy = false;
-    scan();
+    classify();
   }
 
   function jumpToBest() {
@@ -742,27 +880,55 @@
         scan();
       },
       onJumpToBest: jumpToBest,
-      onFindSizes: findPackageSizes
+      onFindSizes: findPackageSizes,
+      onOpenOptions: openOptions
     });
     state.panel.mount();
 
     settingsApi.subscribe(function (next) {
+      // Our own saves echo back through onChanged; skip them.
+      if (JSON.stringify(next) === JSON.stringify(settingsApi.sanitize(state.settings))) return;
+      var wasRemembering = state.settings.rememberPrices;
       state.settings = next;
-      scan();
+      if (next.rememberPrices !== wasRemembering) refreshHistory();
+      else classify();
+    });
+
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
+      chrome.storage.onChanged.addListener(function (changes, areaName) {
+        // Cleared from the options page: stop citing prices that are gone.
+        var change = changes[historyApi.STORAGE_KEY];
+        if (areaName !== 'local' || !change || change.newValue) return;
+        state.pendingPrices.clear();
+        if (state.priceHistory) state.priceHistory = {};
+        classify();
+      });
+    }
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'hidden') flushHistory();
     });
 
     startObserver();
     window.addEventListener('popstate', scheduleScan);
     scheduleScan();
+    refreshHistory();
   }
 
   if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
     chrome.runtime.onMessage.addListener(function (message) {
       if (!message || message.type !== 'ppp:toggle-panel' || !state.settings) return;
-      // Clicking the toolbar icon is also the escape hatch for when a store
+      // Judge by what the user can see: on a dormant page the saved preference
+      // may say "visible" while nothing is shown.
+      var showing = panelView().panelVisible;
+      if (showing) {
+        applySettings({ panelVisible: false });
+        return;
+      }
+      // Opening from the toolbar is also the escape hatch for when a store
       // changes its results URL patterns and auto-detection stops firing.
+      // Closing must not opt the page in, so only this branch forces.
       state.forced = true;
-      applySettings({ panelVisible: !state.settings.panelVisible });
+      applySettings({ panelVisible: true });
       scheduleScan();
     });
   }

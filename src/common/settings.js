@@ -27,12 +27,29 @@
     hideOtherDimension: false,
     /** Treat results below this parse confidence as "unknown". */
     minConfidence: 0.4,
+    /** Reorder the results grid by unit price, cheapest first. */
+    sortByUnitPrice: false,
+    /** Remember the lowest unit price seen per product, on this device only. */
+    rememberPrices: true,
+    /** Whether the badge guide has been dismissed. */
+    onboarded: false,
     /** Panel chrome state. */
     panelVisible: true,
     panelCollapsed: false,
+    /** One of PANEL_CORNERS. */
+    panelCorner: 'bottom-right',
     /** Outline detected cards for adapter debugging. */
     debug: false
   };
+
+  var PANEL_CORNERS = ['bottom-right', 'bottom-left', 'top-right', 'top-left'];
+
+  /** Strictness presets for `minConfidence`, loosest first. */
+  var CONFIDENCE_PRESETS = [
+    { value: 0.25, label: 'Lenient' },
+    { value: 0.4, label: 'Balanced' },
+    { value: 0.6, label: 'Strict' }
+  ];
 
   function hasStorage() {
     return typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync;
@@ -59,12 +76,13 @@
     });
 
     if (!PPP.units.BASES[out.basis]) out.basis = DEFAULTS.basis;
+    if (PANEL_CORNERS.indexOf(out.panelCorner) === -1) out.panelCorner = DEFAULTS.panelCorner;
     out.threshold = Math.min(Math.max(out.threshold, 0), 1e6);
     out.minConfidence = Math.min(Math.max(out.minConfidence, 0), 1);
     if (raw.thresholds && typeof raw.thresholds === 'object') {
       Object.keys(raw.thresholds).forEach(function (currency) {
         var value = Number(raw.thresholds[currency]);
-        if (/^[A-Z]{3}$/.test(currency) && isFinite(value) && value >= 0) {
+        if (isCurrencyCode(currency) && isFinite(value) && value >= 0) {
           out.thresholds[currency] = Math.min(value, 1e6);
         }
       });
@@ -77,9 +95,18 @@
     return out;
   }
 
+  function isCurrencyCode(currency) {
+    return typeof currency === 'string' && /^[A-Z]{3}$/.test(currency);
+  }
+
+  /**
+   * The limit for `currency`. With no currency (nothing on the page carried
+   * one) the unscoped `threshold` is used, so the box still does something.
+   */
   function thresholdFor(settings, currency) {
     var clean = sanitize(settings);
-    return currency && Object.prototype.hasOwnProperty.call(clean.thresholds, currency)
+    if (!currency) return clean.threshold;
+    return Object.prototype.hasOwnProperty.call(clean.thresholds, currency)
       ? clean.thresholds[currency]
       : DEFAULTS.threshold;
   }
@@ -92,11 +119,12 @@
 
   function setThreshold(settings, currency, value) {
     var clean = sanitize(settings);
-    if (!currency || !/^[A-Z]{3}$/.test(currency)) return clean;
     var amount = Number(value);
     if (!isFinite(amount) || amount < 0) return clean;
-    clean.thresholds[currency] = Math.min(amount, 1e6);
-    clean.threshold = clean.thresholds[currency];
+    amount = Math.min(amount, 1e6);
+    if (currency && !isCurrencyCode(currency)) return clean;
+    if (currency) clean.thresholds[currency] = amount;
+    clean.threshold = amount;
     return clean;
   }
 
@@ -140,6 +168,8 @@
 
   PPP.settings = {
     DEFAULTS: DEFAULTS,
+    PANEL_CORNERS: PANEL_CORNERS,
+    CONFIDENCE_PRESETS: CONFIDENCE_PRESETS,
     STORAGE_KEY: STORAGE_KEY,
     sanitize: sanitize,
     thresholdFor: thresholdFor,

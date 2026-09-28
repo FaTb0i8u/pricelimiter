@@ -11,7 +11,9 @@ const units = require('../src/common/units.js');
 const price = require('../src/common/parse-price.js');
 const quantity = require('../src/common/parse-quantity.js');
 const settings = require('../src/common/settings.js');
+const verdict = require('../src/common/verdict.js');
+const history = require('../src/common/history.js');
 const sites = require('../src/content/sites.js');
 const adapter = require('../src/content/site-adapter.js');
 
-module.exports = { units, price, quantity, settings, sites, adapter, PPP: globalThis.PPP };
+module.exports = { units, price, quantity, settings, verdict, history, sites, adapter, PPP: globalThis.PPP };

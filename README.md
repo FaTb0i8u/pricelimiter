@@ -8,7 +8,7 @@ Every one of these stores lets you filter by price, but not by size — so a 5 l
 bag at \$18 and a 12 oz bag at \$9 look comparable when they are not. This
 computes the number they will not show you, and ranks the page by it.
 
-No build step. No dependencies. No server. Nothing to install.
+No build step. No runtime dependencies. No server. Nothing to install.
 
 ---
 
@@ -21,19 +21,62 @@ No build step. No dependencies. No server. Nothing to install.
    `coffee beans` on Google Shopping (`google.com` → Shopping tab),
    `amazon.com/s?k=coffee+beans`, or `walmart.com/search?q=coffee+beans`
 
-The panel appears bottom-right. The toolbar button hides/shows it.
+The panel appears bottom-right; drag it by its title bar and it snaps to the
+nearest corner. The toolbar button hides/shows it. Every setting, including
+per-currency limits, is also on the options page (right-click the toolbar
+button → **Options**, or **Settings** in the panel).
 
 > Publishing to the Chrome Web Store requires a **one-time \$5 developer
 > registration fee**. Loading unpacked, as above, is free forever.
 
 ## Run the tests
 
-Node 18+ only — the suite uses the built-in `node:test` runner, so there is
-nothing to `npm install`:
+Node 20+ only — the suite uses the built-in `node:test` runner and the
+extension has no runtime dependencies, so tests and checks need no install:
 
 ```
-node --test 'test/*.test.js'
+npm test          # unit tests
+npm run check     # syntax, manifest paths, content-script load order
+npm run lint      # ESLint (after a one-time `npm ci` for the dev tooling)
 ```
+
+All three run in CI on every push (`.github/workflows/test.yml`).
+
+### Price history
+
+With **Remember the lowest price I've seen** on (the default), each comparable
+result's price per gram or millilitre is kept in `chrome.storage.local` — on
+this device only, never synced or sent anywhere, capped at 2,000 products with
+the least recently seen dropped first. A result that beats every earlier
+sighting by more than 1% gets a **New low** label, and every badge's tooltip
+names the lowest price seen, where, and how long ago.
+
+Three rules keep it honest. Comparisons are against history as it stood
+*before* the page loaded, so a price is never a new low against itself.
+Currency and weight-versus-volume are part of the key, so pounds never compare
+with dollars. And a size flagged as guessed (the `?` badge) is never recorded,
+because one misread pack size saved as a record low would make every later
+sighting of that product look dear. History can be cleared, or switched off,
+from the options page.
+
+### First run
+
+Installing opens a short welcome page with one-click example searches. On the
+first results page the panel opens a badge guide explaining each colour and
+label; **Got it** dismisses it for good, and the **?** button in the panel
+header brings it back.
+
+### Sorting by unit price
+
+**Sort results by unit price** reorders the grid cheapest first, then items
+measured the other way, then unsized items. It uses CSS `order` rather than
+moving nodes: the stores render with frameworks that break when their DOM is
+rearranged behind their back, and `order` is purely visual and fully
+reversible. Cards are only permuted among the slots cards already occupy, so
+ads and banners stay where the store put them. Google's organic tiles sit
+inside `display: contents` wrappers, which `order` cannot affect, so the sort
+looks through those to the real flex items. Layouts that are neither flex nor
+grid cannot be reordered this way, and the panel says so.
 
 ### Package-size lookup
 
@@ -93,11 +136,14 @@ price text node  ──▶  walk up to the card  ──▶  merchant unit price?
 | `src/common/parse-quantity.js` | Net weight / volume extraction from titles |
 | `src/common/parse-price.js` | Currency parsing incl. non-US decimal conventions |
 | `src/common/settings.js` | `chrome.storage.sync` persistence + input sanitising |
-| `src/content/sites.js` | Per-store profiles: host match, results-page test, selectors |
+| `src/common/verdict.js` | Pass/fail/n.a. rules, sort order, locale-aware money formatting |
+| `src/common/history.js` | Lowest-price-seen history in `chrome.storage.local` |
+| `src/content/sites.js` | Per-store profiles: host match, results-page test, selectors, currency |
 | `src/content/site-adapter.js` | Locating product cards in each store's DOM |
 | `src/content/panel.js` | Shadow-DOM control panel |
-| `src/content/main.js` | Scan → analyse → annotate → filter pipeline |
-| `src/background/service-worker.js` | Relays toolbar clicks to the page |
+| `src/content/main.js` | Scan → analyse → annotate → filter → sort pipeline |
+| `src/options/` | Options page, sharing `settings.js` with the panel |
+| `src/background/service-worker.js` | Toolbar clicks, opening options, product-page lookups |
 
 ### Three decisions worth knowing about
 
@@ -247,11 +293,12 @@ the user saw nothing. It is now `9999`: high enough to win inside a card,
 without reaching for the 32-bit maximum and covering site menus and modals that
 legitimately belong on top.
 
-A warning about diagnosing this class of bug: `document.elementFromPoint` is
-**useless** here, because the badge sets `pointer-events: none` so it never
-blocks clicks on the card. Hit-testing therefore reports the element underneath
-whether or not the badge is visible. The only trustworthy check is pixels —
-screenshot the card, change one property, screenshot again.
+A warning about diagnosing this class of bug: `document.elementFromPoint` was
+**useless** here, because the badge then set `pointer-events: none`, so
+hit-testing reported the element underneath whether or not the badge was
+visible. (The badge now accepts hover so its explanatory tooltip can appear.)
+The only trustworthy check is pixels — screenshot the card, change one
+property, screenshot again.
 
 **Card body text is not a product title.** Google prints spec chips under each
 result: `Amino Acids · 30 g per serving · Muscle Gain · Powder`. Read as a size,

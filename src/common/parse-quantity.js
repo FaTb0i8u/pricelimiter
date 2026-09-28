@@ -84,7 +84,7 @@
   /** A size immediately preceded by one of these is an authoritative total. */
   var NET_LABEL_RE = /\b(?:net\s*(?:wt|weight)|total\s*(?:wt|weight|net)|net\s*(?:vol|volume))\b[\s.:()-]*$/i;
 
-  var CURRENCY_BEFORE_RE = /[$\u00a3\u20ac\u00a5\u20b9]\s?$/;
+  var CURRENCY_BEFORE_RE = new RegExp('[' + PPP.price.SYMBOL_CHARS + ']\\s?$');
 
   function normalizeText(text) {
     if (!text) return '';

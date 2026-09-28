@@ -58,66 +58,96 @@ function encodePng(size, rgba) {
 
 /* ------------------------------------------------------------------ artwork */
 
-const BACKGROUND = [30, 142, 62]; // Google green 700
-const MARGIN = 0.06;
-const RADIUS = 0.2;
+/*
+ * The mark is a single PRICE TAG, drawn as signed-distance fields rather than
+ * boolean masks so edges carry real coverage instead of a supersampled hard
+ * test. At 16px the string hole is barely over one pixel across and only
+ * survives as partial coverage.
+ *
+ * Three rejected alternatives are worth not repeating. A bare chevron over a
+ * bar, and then a full arrow over a bar, both read in the toolbar as
+ * "download" or "collapse" -- the two affordances browser chrome already
+ * spends most of its icon vocabulary on. Two overlapping tags, meaning
+ * "compare prices", merged into an unreadable blob below 48px.
+ */
 
-function insideRoundedRect(x, y) {
-  const half = 0.5 - MARGIN;
-  const dxAbs = Math.abs(x - 0.5);
-  const dyAbs = Math.abs(y - 0.5);
-  if (dxAbs > half || dyAbs > half) return false;
-  const dx = Math.max(dxAbs - (half - RADIUS), 0);
-  const dy = Math.max(dyAbs - (half - RADIUS), 0);
-  return dx * dx + dy * dy <= RADIUS * RADIUS;
+const SURFACE_TOP = [46, 168, 83]; // matches the panel's #1e8e3e family, lifted
+const SURFACE_BOTTOM = [11, 92, 41];
+const MARGIN = 0.055;
+const RADIUS = 0.225;
+
+/** Negative inside the shape, positive outside, in unit-square distance. */
+function roundedBoxSdf(px, py, halfWidth, halfHeight, radius) {
+  const dx = Math.abs(px) - (halfWidth - radius);
+  const dy = Math.abs(py) - (halfHeight - radius);
+  return Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) + Math.min(Math.max(dx, dy), 0) - radius;
 }
 
-function distanceToSegment(px, py, ax, ay, bx, by) {
-  const abx = bx - ax;
-  const aby = by - ay;
-  const lengthSquared = abx * abx + aby * aby;
-  let t = lengthSquared === 0 ? 0 : ((px - ax) * abx + (py - ay) * aby) / lengthSquared;
-  t = Math.max(0, Math.min(1, t));
-  const dx = px - (ax + t * abx);
-  const dy = py - (ay + t * aby);
-  return Math.sqrt(dx * dx + dy * dy);
+function surfaceSdf(x, y) {
+  return roundedBoxSdf(x - 0.5, y - 0.5, 0.5 - MARGIN, 0.5 - MARGIN, RADIUS);
 }
 
-/** A downward chevron over a baseline: "lower price, per unit". */
-function insideGlyph(x, y) {
-  const chevron =
-    Math.min(
-      distanceToSegment(x, y, 0.28, 0.36, 0.5, 0.58),
-      distanceToSegment(x, y, 0.5, 0.58, 0.72, 0.36)
-    ) <= 0.068;
-  const baseline = distanceToSegment(x, y, 0.31, 0.735, 0.69, 0.735) <= 0.05;
-  return chevron || baseline;
+const SIN45 = Math.sin(Math.PI / 4);
+const COS45 = Math.cos(Math.PI / 4);
+
+/**
+ * One tag: a square rotated 45 degrees with a punched-out string hole, which
+ * is the shape every storefront in the world already uses for "price".
+ * @param {number} cx centre in screen space
+ * @param {number} scale half-edge of the square before rotation
+ */
+function tagSdf(x, y, cx, cy, scale) {
+  const dx = x - cx;
+  const dy = y - cy;
+  const u = dx * COS45 + dy * SIN45;
+  const v = -dx * SIN45 + dy * COS45;
+
+  const body = roundedBoxSdf(u, v, scale, scale, scale * 0.2);
+  const hole = Math.hypot(u + scale * 0.44, v + scale * 0.44) - scale * 0.27;
+  return Math.max(body, -hole); // subtract the hole from the body
+}
+
+const TAG = { cx: 0.5, cy: 0.5, scale: 0.2 };
+
+function glyphSdf(x, y) {
+  return tagSdf(x, y, TAG.cx, TAG.cy, TAG.scale);
+}
+
+/**
+ * Coverage of an SDF at one pixel. The distance is compared against half a
+ * pixel, which is exactly the width of the band an antialiased edge occupies.
+ */
+function coverage(distance, pixel) {
+  return Math.max(0, Math.min(1, 0.5 - distance / pixel));
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
 }
 
 function renderIcon(size) {
-  const samples = 4;
+  const pixel = 1 / size;
   const rgba = Buffer.alloc(size * size * 4);
+
   for (let py = 0; py < size; py++) {
     for (let px = 0; px < size; px++) {
-      let background = 0;
-      let foreground = 0;
-      for (let sy = 0; sy < samples; sy++) {
-        for (let sx = 0; sx < samples; sx++) {
-          const x = (px + (sx + 0.5) / samples) / size;
-          const y = (py + (sy + 0.5) / samples) / size;
-          if (!insideRoundedRect(x, y)) continue;
-          background++;
-          if (insideGlyph(x, y)) foreground++;
-        }
-      }
-      const total = samples * samples;
+      const x = (px + 0.5) / size;
+      const y = (py + 0.5) / size;
+
+      const surface = coverage(surfaceSdf(x, y), pixel);
+      if (surface <= 0) continue;
+
+      // Clipping the glyph to the surface keeps it from bleeding past the
+      // rounded corners at small sizes.
+      const ink = Math.min(coverage(glyphSdf(x, y), pixel), surface);
+
+      const shade = (y - MARGIN) / (1 - 2 * MARGIN);
       const offset = (py * size + px) * 4;
-      if (background === 0) continue;
-      const mix = foreground / background;
-      rgba[offset] = Math.round(BACKGROUND[0] * (1 - mix) + 255 * mix);
-      rgba[offset + 1] = Math.round(BACKGROUND[1] * (1 - mix) + 255 * mix);
-      rgba[offset + 2] = Math.round(BACKGROUND[2] * (1 - mix) + 255 * mix);
-      rgba[offset + 3] = Math.round((background / total) * 255);
+      for (let channel = 0; channel < 3; channel++) {
+        const base = lerp(SURFACE_TOP[channel], SURFACE_BOTTOM[channel], Math.min(Math.max(shade, 0), 1));
+        rgba[offset + channel] = Math.round(lerp(base, 255, ink / surface));
+      }
+      rgba[offset + 3] = Math.round(surface * 255);
     }
   }
   return encodePng(size, rgba);
