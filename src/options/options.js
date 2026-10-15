@@ -85,7 +85,11 @@
       basis.appendChild(option(key, BASES[key].label));
     });
     basis.addEventListener('change', function () {
-      patch('basis', basis.value);
+      var from = BASES[current.basis];
+      var to = BASES[basis.value];
+      var converted = from && to && from !== to && from.dimension === to.dimension;
+      commit(settingsApi.setBasis(current, basis.value),
+        converted ? 'Saved \u2013 limits converted to per ' + to.label : 'Saved');
     });
 
     var corner = byId('panelCorner');
@@ -192,7 +196,7 @@
     input.step = '0.01';
     input.value = String(amount);
     input.setAttribute('data-currency', code);
-    input.setAttribute('aria-label', 'Maximum price per unit in ' + currencyName(code));
+    input.setAttribute('aria-label', 'Maximum price per ' + unitLabel() + ' in ' + currencyName(code));
     input.addEventListener('change', function () {
       var value = Number(input.value);
       if (input.value === '' || !isFinite(value) || value < 0) {
@@ -251,8 +255,14 @@
     byId('add-limit').hidden = !add.options.length;
   }
 
+  function unitLabel() {
+    return (BASES[current.basis] || BASES.lb).label;
+  }
+
   function render() {
     byId('basis').value = current.basis;
+    byId('limit-unit-heading').textContent = 'Maximum per ' + unitLabel();
+    byId('add-amount-label').textContent = 'Maximum per ' + unitLabel();
     byId('panelCorner').value = current.panelCorner;
     TOGGLES.forEach(function (key) {
       byId(key).checked = !!current[key];
@@ -261,8 +271,33 @@
     renderLimits();
   }
 
+  /** The toolbar shortcut as Chrome has it, which the user may have changed. */
+  function renderShortcut() {
+    var help = byId('shortcut-help');
+    var button = byId('change-shortcut');
+    if (typeof chrome === 'undefined' || !chrome.commands || !chrome.commands.getAll) {
+      help.parentNode.hidden = true;
+      return;
+    }
+    chrome.commands.getAll(function (commands) {
+      var shortcut = '';
+      (commands || []).forEach(function (command) {
+        if (command.name === '_execute_action') shortcut = command.shortcut || '';
+      });
+      help.textContent = shortcut
+        ? 'Keyboard shortcut to show or hide the panel: ' + shortcut + '.'
+        : 'No keyboard shortcut is set for showing and hiding the panel.';
+    });
+    button.addEventListener('click', function () {
+      // Pages cannot link to chrome:// URLs; the extension can open them.
+      chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+    });
+  }
+
   buildStaticControls();
+  renderShortcut();
   byId('welcome').hidden = location.hash !== '#welcome';
+  byId('unsupported').hidden = location.hash !== '#unsupported';
   renderHistoryCount();
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
     chrome.storage.onChanged.addListener(function (changes, areaName) {

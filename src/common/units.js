@@ -42,13 +42,23 @@
   /**
    * Bases the user can filter on. `perBase` is how many canonical units make
    * up one of these, e.g. one pound is 453.59237 grams.
+   *
+   * `counterpart` is the base used to show an item measured the other way:
+   * filtering per pound, a bottle sold by volume is shown per litre. Each is
+   * the natural pair from the same system, so a per-100 g shopper sees drinks
+   * per 100 ml rather than per US fluid ounce.
+   *
+   * The per-100 bases are how UK, Canadian and Australian shelves quote unit
+   * prices, and what Amazon prints on those storefronts.
    */
   var BASES = {
-    lb: { key: 'lb', label: 'lb', dimension: 'mass', perBase: MASS_TO_GRAMS.lb },
-    kg: { key: 'kg', label: 'kg', dimension: 'mass', perBase: MASS_TO_GRAMS.kg },
-    oz: { key: 'oz', label: 'oz', dimension: 'mass', perBase: MASS_TO_GRAMS.oz },
-    l: { key: 'l', label: 'L', dimension: 'volume', perBase: VOLUME_TO_ML.l },
-    floz: { key: 'floz', label: 'fl oz', dimension: 'volume', perBase: VOLUME_TO_ML.floz }
+    lb: { key: 'lb', label: 'lb', dimension: 'mass', perBase: MASS_TO_GRAMS.lb, counterpart: 'l' },
+    kg: { key: 'kg', label: 'kg', dimension: 'mass', perBase: MASS_TO_GRAMS.kg, counterpart: 'l' },
+    oz: { key: 'oz', label: 'oz', dimension: 'mass', perBase: MASS_TO_GRAMS.oz, counterpart: 'floz' },
+    g100: { key: 'g100', label: '100 g', dimension: 'mass', perBase: 100, counterpart: 'ml100' },
+    l: { key: 'l', label: 'L', dimension: 'volume', perBase: VOLUME_TO_ML.l, counterpart: 'kg' },
+    floz: { key: 'floz', label: 'fl oz', dimension: 'volume', perBase: VOLUME_TO_ML.floz, counterpart: 'oz' },
+    ml100: { key: 'ml100', label: '100 ml', dimension: 'volume', perBase: 100, counterpart: 'g100' }
   };
 
   /**

@@ -47,6 +47,13 @@
     return declared || inferred;
   }
 
+  /** The base an item measured the other way is shown in, e.g. litres beside pounds. */
+  function counterpartOf(base) {
+    var other = BASES[base.counterpart];
+    if (other && other.dimension !== base.dimension) return other;
+    return base.dimension === 'mass' ? BASES.l : BASES.lb;
+  }
+
   /** Verdict from the merchant's own unit price, or null if it printed none. */
   function evaluateDeclared(data, base, settings) {
     var declared = data.unitPrice;
@@ -58,7 +65,7 @@
     }
     var perCanonical = declared.amount / declared.perUnit.factor;
     if (declared.perUnit.dimension !== base.dimension) {
-      var other = declared.perUnit.dimension === 'mass' ? BASES.lb : BASES.l;
+      var other = counterpartOf(base);
       return {
         state: 'na',
         altBase: other,
@@ -86,7 +93,7 @@
     }
 
     if (data.quantity.dimension !== base.dimension) {
-      var altBase = data.quantity.dimension === 'mass' ? BASES.lb : BASES.l;
+      var altBase = counterpartOf(base);
       return {
         state: 'na',
         altBase: altBase,

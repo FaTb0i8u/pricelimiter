@@ -125,3 +125,61 @@ test('the fixture corpus parses as expected end to end', () => {
     assert.strictEqual(Math.round(perLb * 100) / 100, c.perLb, c.text);
   }
 });
+
+/**
+ * Amazon's UK, Canadian and Australian storefronts quote unit prices per
+ * 100 g or 100 ml, and Amazon US quotes some per 100 count. The number in the
+ * denominator used to stop the tail matching, so "£0.83" was read as an ITEM
+ * price and - being the lowest - won, pricing a £2.50 tin at a third of its
+ * cost. That is the dangerous direction: it makes a bad deal look cheap.
+ */
+test('a unit price quoted per 100 g is a unit price, not the item price', () => {
+  const text = '£2.50 (£0.83/100 g)';
+  assert.strictEqual(price.parsePrice(text).amount, 2.5);
+
+  const unit = price.parseUnitPrice(text);
+  assert.strictEqual(unit.amount, 0.83);
+  assert.strictEqual(unit.perUnit.key, 'g');
+  assert.strictEqual(unit.perUnit.factor, 100);
+  assert.strictEqual(unit.perUnit.label, '100 g');
+  assert.strictEqual(unit.raw, '£0.83/100 g');
+  const perKg = (unit.amount / unit.perUnit.factor) * units.BASES.kg.perBase;
+  assert.strictEqual(Math.round(perKg * 100) / 100, 8.3);
+});
+
+test('numbered denominators work for volume, "per" and counts', () => {
+  const ml = price.parseUnitPrice('£1.20 per 100ml');
+  assert.strictEqual(ml.perUnit.dimension, 'volume');
+  assert.strictEqual(ml.perUnit.factor, 100);
+
+  const count = price.parseUnitPrice('$12.99 ($0.13/100 Count)');
+  assert.strictEqual(count.perUnit.dimension, 'count');
+  assert.strictEqual(count.perUnit.label, '100 Count');
+  assert.strictEqual(price.parsePrice('$12.99 ($0.13/100 Count)').amount, 12.99);
+
+  const one = price.parseUnitPrice('$9.99 ($9.99/1 lb)');
+  assert.strictEqual(one.perUnit.factor, units.MASS_TO_GRAMS.lb);
+});
+
+test('a zero denominator is not a price of anything', () => {
+  assert.strictEqual(price.parseUnitPrice('$1.00/0 g'), null);
+  assert.strictEqual(price.parsePrice('$1.00/0 g'), null);
+});
+
+test('Walmart cent unit prices and sub-dollar item prices parse', () => {
+  const unit = price.parseUnitPrice('$3.98 11.2 \u00a2/oz');
+  assert.strictEqual(unit.amount, 0.112);
+  assert.strictEqual(unit.perUnit.key, 'oz');
+  assert.strictEqual(unit.currency, null, 'a cent sign names no currency');
+  assert.strictEqual(price.parsePrice('$3.98 11.2 \u00a2/oz').amount, 3.98);
+
+  assert.strictEqual(price.parsePrice('88\u00a2').amount, 0.88);
+  assert.strictEqual(price.parseUnitPrice('$1.48 9.3\u00a2/fl oz').perUnit.key, 'floz');
+  assert.ok(price.looksLikePrice('11.2 \u00a2/oz'));
+});
+
+test('unit price display text is tidied, not squashed', () => {
+  assert.strictEqual(price.parseUnitPrice('$0.62/Fl Oz').raw, '$0.62/Fl Oz');
+  assert.strictEqual(price.parseUnitPrice('$1.41 / ounce)').raw, '$1.41/ounce');
+  assert.strictEqual(price.parseUnitPrice('$0.13 per fl oz').raw, '$0.13 per fl oz');
+});

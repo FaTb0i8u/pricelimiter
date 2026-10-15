@@ -116,6 +116,10 @@
     '      <span>Sort results by unit price</span>',
     '    </label>',
     '    <p class="stats" data-role="stats" role="status" aria-live="polite"></p>',
+    '    <p class="unsized-note" data-role="unsized-note" hidden>',
+    '      <span data-role="unsized-text"></span>',
+    '      <button class="link" data-action="hide-unsized" type="button">Hide them too</button>',
+    '    </p>',
     '    <button class="best" data-action="best" type="button" hidden>',
     ICONS.target,
     '      <span data-role="best-label"></span>',
@@ -124,6 +128,7 @@
     ICONS.search,
     '      <span data-role="detail-label"></span>',
     '    </button>',
+    '    <p class="detail-result" data-role="detail-result" role="status" hidden></p>',
     '    <div class="footer">',
     '      <span class="links">',
     '        <button class="link" data-action="rescan" type="button">Rescan page</button>',
@@ -148,6 +153,9 @@
     '  position: fixed; right: 16px; bottom: 16px; z-index: 2147483000;',
     '  pointer-events: auto;',
     '  width: 292px; max-width: calc(100vw - 32px);',
+    // With the guide open the panel is ~730px tall. On a short window it ran
+    // off the top, taking the close button with it; now the body scrolls.
+    '  display: flex; flex-direction: column; max-height: calc(100vh - 32px);',
     '  font: 400 13px/1.5 Roboto, Arial, system-ui, sans-serif; color: #202124;',
     '  background: #fff; border: 1px solid #dadce0; border-radius: 12px;',
     '  box-shadow: 0 6px 20px rgba(60,64,67,.28); overflow: hidden;',
@@ -156,7 +164,7 @@
     '.panel[data-corner="top-right"] { bottom: auto; top: 16px; }',
     '.panel[data-corner="top-left"] { bottom: auto; top: 16px; right: auto; left: 16px; }',
     '.panel[data-dragging="true"] { box-shadow: 0 12px 32px rgba(60,64,67,.38); user-select: none; }',
-    '.header { display: flex; align-items: center; gap: 8px; padding: 10px 8px 10px 12px;',
+    '.header { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 8px 10px 12px;',
     '  background: #f8f9fa; border-bottom: 1px solid #e8eaed; cursor: grab; touch-action: none; }',
     '.panel[data-dragging="true"] .header { cursor: grabbing; }',
     '.mark { flex: none; display: grid; place-items: center; color: #1e8e3e; }',
@@ -170,7 +178,9 @@
     '.chevron { transition: transform 120ms ease; }',
     '.panel[data-collapsed="true"] .chevron { transform: rotate(180deg); }',
     '.panel[data-collapsed="true"] .body { display: none; }',
-    '.body { padding: 12px; display: flex; flex-direction: column; gap: 12px; }',
+    '.body { padding: 12px; display: flex; flex-direction: column; gap: 12px;',
+    '  min-height: 0; overflow-y: auto; overscroll-behavior: contain; }',
+    '.body > * { flex: none; }',
     '.field { display: flex; flex-direction: column; gap: 6px; }',
     '.label { font-size: 12px; font-weight: 600; color: #3c4043; }',
     '.input-row { display: flex; gap: 8px; }',
@@ -179,7 +189,7 @@
     '.prefix { flex: none; color: #5f6368; font-size: 13px; }',
     '.number { flex: 1 1 auto; min-width: 0; width: 100%; height: 100%; padding: 0; font: inherit;',
     '  color: inherit; background: transparent; border: 0; outline: none; }',
-    '.select { flex: 0 0 88px; height: 34px; padding: 0 6px; font: inherit; color: inherit;',
+    '.select { flex: 0 0 100px; height: 34px; padding: 0 6px; font: inherit; color: inherit;',
     '  background: #fff; border: 1px solid #dadce0; border-radius: 8px; }',
     '.money:focus-within, .select:focus-visible { outline: 2px solid #1a73e8; outline-offset: 0;',
     '  border-color: #1a73e8; }',
@@ -199,6 +209,9 @@
     '.check input { margin: 2px 0 0; accent-color: #1a73e8; }',
     '.check input:focus-visible { outline: 2px solid #1a73e8; outline-offset: 1px; }',
     '.stats { margin: 0; font-size: 12px; color: #5f6368; min-height: 18px; }',
+    '.unsized-note { margin: 0; padding: 7px 10px; font-size: 12px; color: #3c4043;',
+    '  background: #fef7e0; border: 1px solid #fce8b2; border-radius: 8px; }',
+    '.unsized-note[hidden] { display: none; }',
     '.best { width: 100%; padding: 8px 10px; display: flex; align-items: center; gap: 8px;',
     '  text-align: left; font: inherit; font-size: 12px;',
     '  color: #0d652d; background: #e6f4ea; border: 1px solid #a8dab5; border-radius: 8px;',
@@ -210,7 +223,8 @@
     '  color: #1a73e8; background: #f8f9fa; border: 1px solid #dadce0; border-radius: 8px; cursor: pointer; }',
     '.detail:hover:not(:disabled) { background: #e8f0fe; } .detail:disabled { color: #80868b; cursor: wait; }',
     '.detail:focus-visible { outline: 2px solid #1a73e8; outline-offset: 1px; }',
-    '.best[hidden], .detail[hidden] { display: none; }',
+    '.detail-result { margin: -6px 0 0; font-size: 12px; color: #5f6368; }',
+    '.best[hidden], .detail[hidden], .detail-result[hidden] { display: none; }',
     '.footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }',
     '.links { display: flex; gap: 12px; }',
     '.link { padding: 0; font: inherit; font-size: 12px; color: #1a73e8; background: none;',
@@ -256,7 +270,8 @@
     '  .header { background: #292a2d; border-bottom-color: #3c4043; }',
     '  .mark { color: #81c995; }',
     '  .icon-btn { color: #9aa0a6; } .icon-btn:hover { background: #3c4043; color: #e8eaed; }',
-    '  .label { color: #bdc1c6; } .check { color: #bdc1c6; } .stats { color: #9aa0a6; }',
+    '  .label { color: #bdc1c6; } .check { color: #bdc1c6; } .stats, .detail-result { color: #9aa0a6; }',
+    '  .unsized-note { background: #3a3000; border-color: #5c4a00; color: #fde293; }',
     '  .money, .select { background: #202124; border-color: #5f6368; color: #e8eaed; }',
     '  .prefix { color: #9aa0a6; }',
     '  .best { background: #12351f; border-color: #1e8e3e; color: #81c995; }',
@@ -293,11 +308,15 @@
       currency: shadow.querySelector('[data-role="currency"]'),
       otherLabel: shadow.querySelector('[data-role="other-dimension-label"]'),
       stats: shadow.querySelector('[data-role="stats"]'),
+      unsizedNote: shadow.querySelector('[data-role="unsized-note"]'),
+      unsizedText: shadow.querySelector('[data-role="unsized-text"]'),
+      hideUnsized: shadow.querySelector('[data-action="hide-unsized"]'),
       hint: shadow.querySelector('[data-role="hint"]'),
       best: shadow.querySelector('[data-action="best"]'),
       bestLabel: shadow.querySelector('[data-role="best-label"]'),
       detail: shadow.querySelector('[data-action="detail"]'),
       detailLabel: shadow.querySelector('[data-role="detail-label"]'),
+      detailResult: shadow.querySelector('[data-role="detail-result"]'),
       collapse: shadow.querySelector('[data-action="collapse"]'),
       close: shadow.querySelector('[data-action="close"]'),
       help: shadow.querySelector('[data-action="help"]'),
@@ -356,7 +375,13 @@
     // Commit immediately when the field is left or Enter is pressed, rather
     // than waiting out the debounce.
     refs.threshold.addEventListener('change', flush);
-    refs.threshold.addEventListener('blur', flush);
+    refs.threshold.addEventListener('blur', function () {
+      flush();
+      // A cleared or invalid entry was never applied, so put the limit that
+      // is actually in force back rather than leave the box blank.
+      var value = parseFloat(refs.threshold.value);
+      if (!isFinite(value) || value < 0) rerender();
+    });
     refs.basis.addEventListener('change', function () {
       emit({ basis: refs.basis.value }, true);
     });
@@ -368,6 +393,10 @@
     });
     refs.hideOther.addEventListener('change', function () {
       emit({ hideOtherDimension: refs.hideOther.checked }, true);
+    });
+    refs.hideUnsized.addEventListener('click', function () {
+      emit({ hideUnknown: true }, true);
+      refs.hideUnknown.focus();
     });
     refs.sort.addEventListener('change', function () {
       emit({ sortByUnitPrice: refs.sort.checked }, true);
@@ -495,7 +524,8 @@
       refs.legend.hidden = !showLegend;
       refs.help.setAttribute('aria-expanded', showLegend ? 'true' : 'false');
       refs.legendHint.textContent =
-        'Your limit is ' + (stats.currencySymbol || '') + settings.threshold + ' per ' + base.label +
+        'Your limit is ' + (stats.limitLabel || (stats.currencySymbol || '') + settings.threshold) +
+        ' per ' + base.label +
         '. Change it below, then turn on hiding to clear out the rest.';
 
       host.hidden = !settings.panelVisible;
@@ -550,17 +580,36 @@
         refs.bestLabel.textContent = '';
       }
 
-      if (stats.detailLookup) {
+      var lookup = stats.detailLookup;
+      if (lookup && (lookup.busy || lookup.count > 0)) {
         refs.detail.hidden = false;
-        refs.detail.disabled = !!stats.detailLookup.busy;
-        refs.detailLabel.textContent = stats.detailLookup.busy
+        refs.detail.disabled = !!lookup.busy;
+        refs.detailLabel.textContent = lookup.busy
           ? 'Looking for package sizes\u2026'
-          : 'Find package sizes for up to ' + stats.detailLookup.count + ' results';
+          : 'Find package sizes for up to ' + lookup.count + (lookup.count === 1 ? ' result' : ' results');
       } else {
         refs.detail.hidden = true;
       }
+      var result = lookup && !lookup.busy ? lookup.result : null;
+      refs.detailResult.hidden = !result;
+      refs.detailResult.textContent = result ? describeLookup(result) : '';
+
+      // With hiding on, visible results that could not be priced read as the
+      // filter failing. Say why they are there and offer the fix in place.
+      var unsizedShown = settings.filterEnabled && !settings.hideUnknown ? stats.unsizedShown || 0 : 0;
+      refs.unsizedNote.hidden = !unsizedShown;
+      refs.unsizedText.textContent = unsizedShown === 1
+        ? '1 result is still showing because it doesn\u2019t list its size.'
+        : unsizedShown + ' results are still showing because they don\u2019t list their size.';
 
       refs.hint.textContent = stats.hint || '';
+    }
+
+    function describeLookup(result) {
+      var pages = result.tried + (result.tried === 1 ? ' product page' : ' product pages');
+      if (!result.found) return 'No package sizes found on ' + pages + '.';
+      return 'Found ' + result.found + (result.found === 1 ? ' package size' : ' package sizes') +
+        ' on ' + pages + '.';
     }
 
     function mount() {

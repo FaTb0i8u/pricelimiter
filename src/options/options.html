@@ -28,6 +28,16 @@
       <p class="help">The panel on the results page explains what each badge means. You can come back here any time from the toolbar button’s right-click menu.</p>
     </section>
 
+    <section class="card welcome" id="unsupported" aria-labelledby="h-unsupported" hidden>
+      <h2 id="h-unsupported">Nothing to filter on that tab</h2>
+      <p>The unit price panel appears on search results at Google Shopping, Amazon and Walmart. If you were already on one of those pages, reload it: pages opened before the extension was installed or updated can’t be reached until they are.</p>
+      <ul class="try">
+        <li><a href="https://www.google.com/search?q=coffee+beans&amp;udm=28" target="_blank" rel="noopener">Google Shopping</a></li>
+        <li><a href="https://www.amazon.com/s?k=coffee+beans" target="_blank" rel="noopener">Amazon</a></li>
+        <li><a href="https://www.walmart.com/search?q=coffee+beans" target="_blank" rel="noopener">Walmart</a></li>
+      </ul>
+    </section>
+
     <section class="card" aria-labelledby="h-filtering">
       <h2 id="h-filtering">Filtering</h2>
       <div class="row">
@@ -54,10 +64,10 @@
 
     <section class="card" aria-labelledby="h-limits">
       <h2 id="h-limits">Price limits</h2>
-      <p class="help">Each currency keeps its own limit, so a limit in US dollars is never applied to Canadian dollars or pounds.</p>
+      <p class="help">Each currency keeps its own limit, so a limit in US dollars is never applied to Canadian dollars or pounds. Limits are per the unit chosen under Filtering, and are converted when you switch between units of weight or of volume.</p>
       <table class="limits" id="limits" aria-labelledby="h-limits" hidden>
         <thead>
-          <tr><th scope="col">Currency</th><th scope="col">Maximum per unit</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
+          <tr><th scope="col">Currency</th><th scope="col" id="limit-unit-heading">Maximum per unit</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
         </thead>
         <tbody id="limits-body"></tbody>
       </table>
@@ -65,7 +75,7 @@
       <form class="add-limit" id="add-limit">
         <label class="sr-only" for="add-currency">Currency</label>
         <select id="add-currency"></select>
-        <label class="sr-only" for="add-amount">Maximum per unit</label>
+        <label class="sr-only" for="add-amount" id="add-amount-label">Maximum per unit</label>
         <input id="add-amount" type="number" inputmode="decimal" min="0" step="0.01" placeholder="Limit" required>
         <button type="submit" class="secondary">Add limit</button>
       </form>
@@ -91,6 +101,10 @@
         <select id="panelCorner"></select>
       </div>
       <p class="help">You can also drag the panel by its title bar; it snaps to the nearest corner.</p>
+      <div class="row">
+        <p class="help" id="shortcut-help"></p>
+        <button id="change-shortcut" type="button" class="secondary">Change shortcut</button>
+      </div>
       <div>
         <button id="show-guide" type="button" class="secondary">Show the badge guide again</button>
       </div>

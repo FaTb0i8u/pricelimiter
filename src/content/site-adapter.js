@@ -461,6 +461,29 @@
     return false;
   }
 
+  /** How much text either side of a price counts as describing it. */
+  var CONTEXT_RADIUS = 40;
+
+  /**
+   * The words around a price, for telling "+$5.99 delivery" from the item
+   * price. Normally the parent's text, which holds a label like "delivery" in
+   * a sibling node.
+   *
+   * But on Walmart the price's parent is the whole card, and every card says
+   * "Free shipping" or "Delivery today" somewhere. Reading all of it rejected
+   * the real price on every such card, leaving cards with no item price at
+   * all. So a long parent contributes only the text near the price.
+   */
+  function priceContext(el, own) {
+    var parent = el.parentElement;
+    var text = cleanText((parent ? parent.textContent : own) || '');
+    if (text.length <= CONTEXT_RADIUS * 3) return text;
+    var needle = cleanText(own);
+    var at = needle ? text.indexOf(needle) : -1;
+    if (at === -1) return needle;
+    return text.slice(Math.max(0, at - CONTEXT_RADIUS), at + needle.length + CONTEXT_RADIUS);
+  }
+
   /**
    * The item's own price, ignoring delivery fees, struck-through originals and
    * financing figures.
@@ -483,10 +506,7 @@
       var text = stripWasPrices(node.nodeValue);
       if (!price.looksLikePrice(text)) continue;
 
-      var context = stripWasPrices(
-        cleanText((el.parentElement ? el.parentElement.textContent : node.nodeValue) || '')
-      );
-      if (NON_PRICE_CONTEXT_RE.test(context)) continue;
+      if (NON_PRICE_CONTEXT_RE.test(stripWasPrices(priceContext(el, node.nodeValue)))) continue;
 
       var parsed = price.parsePrice(text);
       if (parsed) return parsed;

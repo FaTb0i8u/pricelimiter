@@ -38,17 +38,27 @@
   var SYMBOL_PATTERN = '(?:US\\s?\\$|CA\\s?\\$|NZ\\s?\\$|HK\\s?\\$|A\\s?\\$|R\\$|[' + SYMBOL_CHARS + '])';
   var CODE_PATTERN =
     '(?:USD|CAD|AUD|NZD|GBP|EUR|JPY|INR|MXN|BRL|CHF|SEK|NOK|DKK|PLN|ZAR|SGD|HKD|KRW)';
-  var NUMBER_PATTERN = '\\d[\\d.,\\u00a0\u2009]*\\d|\\d';
+  // U+202F is the grouping space Intl itself writes for French and other
+  // locales ("1 234,56 €"); without it only "234,56" was read.
+  var NUMBER_PATTERN = '\\d[\\d.,\\u00a0\\u2009\\u202f]*\\d|\\d';
+  /**
+   * The cent sign. Walmart prints cheap unit prices as "11.2 ¢/oz" rather than
+   * "$0.112/oz", and sub-dollar items as "88¢". It names no currency of its
+   * own, so these amounts carry none and never sway the page's currency.
+   */
+  var CENT = '\u00a2';
 
   var PRICE_RE = new RegExp(
     '(' + SYMBOL_PATTERN + '|' + CODE_PATTERN + ')\\s?(' + NUMBER_PATTERN + ')' +
-      '|(' + NUMBER_PATTERN + ')\\s?(' + SYMBOL_PATTERN + '|' + CODE_PATTERN + ')',
+      '|(' + NUMBER_PATTERN + ')\\s?(' + SYMBOL_PATTERN + '|' + CODE_PATTERN + ')' +
+      '|(' + NUMBER_PATTERN + ')\\s?' + CENT,
     'gi'
   );
 
   /** Cheap pre-filter used when walking thousands of text nodes. */
   var LOOKS_LIKE_PRICE_RE = new RegExp(
-    SYMBOL_PATTERN + '\\s?\\d|\\d\\s?' + SYMBOL_PATTERN + '|\\d\\s?' + CODE_PATTERN + '\\b',
+    SYMBOL_PATTERN + '\\s?\\d|\\d\\s?' + SYMBOL_PATTERN + '|\\d\\s?' + CODE_PATTERN + '\\b' +
+      '|\\d\\s?' + CENT,
     'i'
   );
 
@@ -56,11 +66,18 @@
    * Matches the "per unit" tail that Google appends to its own unit-price line,
    * e.g. the "/lb" of "$28/lb" or the "/ct" of "$3.00/ct".
    *
+   * The unit may carry its own quantity: Amazon's UK, Canadian and Australian
+   * storefronts print "(£0.83/100 g)", and Amazon US prints "($0.13/100 Count)".
+   * Without the optional number the tail did not match at all, so £0.83 was
+   * taken for the ITEM price - the lowest candidate wins there - and a £2.50 bag
+   * was priced at a third of its cost. Group 1 is that quantity, group 2 the
+   * unit.
+   *
    * Anchored at the start because it is only ever tested against the text that
    * immediately follows a price match.
    */
   var PER_UNIT_TAIL_RE = new RegExp(
-    '^\\s*(?:/|per\\b)\\s*(' +
+    '^\\s*(?:/|per\\b)\\s*(?:(\\d+(?:\\.\\d+)?)\\s*)?(' +
       units.UNIT_PATTERN +
       '|' +
       units.COUNT_UNIT_PATTERN +
@@ -102,8 +119,10 @@
         s = s.replace(/,/g, '');
       }
     } else if (lastComma > -1) {
-      // "12,99" is a decimal comma; "1,234" and "1,234,567" are groupings.
-      s = /^\d{1,3},\d{1,2}$/.test(s) ? s.replace(',', '.') : s.replace(/,/g, '');
+      // "12,99" and "1234,56" are decimal commas (the latter is what is left
+      // of "1 234,56" once its grouping space is gone); "1,234" and
+      // "1,234,567" are groupings.
+      s = /^\d+,\d{1,2}$/.test(s) ? s.replace(',', '.') : s.replace(/,/g, '');
     } else if (lastDot > -1) {
       // Multiple dots can only be grouping separators ("1.234.567").
       if ((s.match(/\./g) || []).length > 1) s = s.replace(/\./g, '');
@@ -146,37 +165,60 @@
       }
       var token = m[1] || m[4];
       var currency = currencyFor(token);
-      var amount = normalizeNumber(m[2] || m[3], currency);
+      var amount;
+      if (m[5]) {
+        amount = normalizeNumber(m[5], null);
+        // Cents to whole units without float noise: 11.2¢ is 0.112, not 0.11199...
+        if (amount !== null) amount = Math.round(amount * 1e4) / 1e6;
+      } else {
+        amount = normalizeNumber(m[2] || m[3], currency);
+      }
       if (amount === null || amount <= 0 || amount > 1e7) continue;
 
       var tail = PER_UNIT_TAIL_RE.exec(text.slice(m.index + m[0].length));
+      var perUnit = tail ? describeUnit(tail[2], tail[1]) : null;
+      if (tail && !perUnit) continue; // "/0 g": not a price of anything
       out.push({
         amount: amount,
         currency: currency,
-        raw: m[0].trim() + (tail ? tail[0].replace(/\s+/g, '') : ''),
+        raw: m[0].trim() + (tail ? tidyTail(tail[0]) : ''),
         index: m.index,
-        perUnit: tail ? describeUnit(tail[1]) : null
+        perUnit: perUnit
       });
     }
     return out;
   }
 
+  /** "/ 100  g" -> "/100 g", " per fl oz" -> " per fl oz", for display. */
+  function tidyTail(tail) {
+    var t = tail.trim().replace(/^\/\s*/, '/').replace(/\s+/g, ' ');
+    return t.charAt(0) === '/' ? t : ' ' + t;
+  }
+
   /**
+   * @param {string} raw the unit as written
+   * @param {string} [count] the quantity written before it, as in "/100 g"
    * @returns {{key: string, dimension: 'mass'|'volume'|'count',
-   *            factor: number|null, label: string}}
+   *            factor: number|null, label: string}|null} `factor` covers the
+   *            whole quantity, so "/100 g" is 100 grams. Null for a zero
+   *            quantity.
    */
-  function describeUnit(raw) {
+  function describeUnit(raw, count) {
+    var per = count ? parseFloat(count) : 1;
+    if (!isFinite(per) || per <= 0) return null;
+    var name = String(raw).trim();
+    var label = count ? count + ' ' + name : name;
     var resolved = units.resolveUnit(raw);
     if (resolved) {
       return {
         key: resolved.key,
         dimension: resolved.dimension,
-        factor: resolved.factor,
-        label: String(raw).trim()
+        factor: resolved.factor * per,
+        label: label
       };
     }
     // Recognised spelling, but a unit of count rather than of mass or volume.
-    return { key: 'count', dimension: 'count', factor: null, label: String(raw).trim() };
+    return { key: 'count', dimension: 'count', factor: null, label: label };
   }
 
   /**

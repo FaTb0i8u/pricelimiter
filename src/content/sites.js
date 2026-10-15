@@ -90,12 +90,15 @@
       matchesHost: function (loc) {
         return WALMART_HOST_RE.test(loc.hostname);
       },
+      // walmart.ca puts the language first ("/en/search?q=") and redirects
+      // the bare "/search" there, so the prefix is optional.
       isResultsPage: function (loc) {
+        var path = String(loc.pathname || '').replace(/^\/(?:en|fr)(?=\/)/, '');
         return (
-          startsWith(loc.pathname, '/search') ||
-          startsWith(loc.pathname, '/browse') ||
-          startsWith(loc.pathname, '/shop') ||
-          startsWith(loc.pathname, '/cp')
+          startsWith(path, '/search') ||
+          startsWith(path, '/browse') ||
+          startsWith(path, '/shop') ||
+          startsWith(path, '/cp')
         );
       },
       scanRoots: ['div[role="main"]', '#maincontent', '#search'],

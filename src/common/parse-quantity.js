@@ -86,6 +86,26 @@
 
   var CURRENCY_BEFORE_RE = new RegExp('[' + PPP.price.SYMBOL_CHARS + ']\\s?$');
 
+  /**
+   * A quantity that is the denominator of a unit price: the "100 g" of
+   * "£0.83/100 g". It is the size the price is quoted per, not the pack's.
+   */
+  var UNIT_PRICE_BEFORE_RE = new RegExp(
+    '(?:[' + PPP.price.SYMBOL_CHARS + ']\\s?\\d[\\d.,]*|\\d[\\d.,]*\\s?[\\u00a2' + PPP.price.SYMBOL_CHARS + '])' +
+      '\\s*(?:/|per\\b)\\s*$',
+    'i'
+  );
+
+  /**
+   * "1,5 kg" - a decimal comma, as amazon.ca prints in French. Only a short
+   * number directly before a unit qualifies, so "1,500 g" (grouping, handled
+   * first) and "Pack of 3, 12 oz" (a list) are left alone.
+   */
+  var DECIMAL_COMMA_RE = new RegExp(
+    '(^|[^\\d.,])(\\d{1,3}),(\\d{1,2})(?=\\s*-?\\s*(?:' + UNIT + ')(?![a-z]))',
+    'g'
+  );
+
   function normalizeText(text) {
     if (!text) return '';
     return String(text)
@@ -94,6 +114,9 @@
       .replace(/[\u2010-\u2015\u2212]/g, '-')
       .replace(/[\u00d7\u2715\u2716]/g, 'x')
       .replace(/(\d),(?=\d{3}(?!\d))/g, '$1')
+      .replace(DECIMAL_COMMA_RE, '$1$2.$3')
+      // ".5 l" is half a litre; the leading zero is often dropped.
+      .replace(/(^|[\s(])\.(\d)/g, function (all, lead, digit) { return lead + '0.' + digit; })
       .replace(/\s+/g, ' ')
       .trim();
   }
@@ -133,7 +156,7 @@
         continue;
       }
       var before = text.slice(0, m.index);
-      if (CURRENCY_BEFORE_RE.test(before)) continue;
+      if (CURRENCY_BEFORE_RE.test(before) || UNIT_PRICE_BEFORE_RE.test(before.slice(-40))) continue;
 
       // A serving/dose size is not the pack size. See SERVING_AFTER_RE.
       var after = text.slice(m.index + m[0].length);

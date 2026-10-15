@@ -145,3 +145,22 @@ test('empty and junk input', () => {
   assert.strictEqual(quantity.parseQuantity(null), null);
   assert.strictEqual(quantity.parseQuantity('Just a product name'), null);
 });
+
+test('the denominator of a unit price is not the pack size', () => {
+  // "£0.83/100 g" prices the product per 100 g; it says nothing about the tin.
+  assert.strictEqual(quantity.parseQuantity('Heinz Beans £2.50 £0.83/100 g'), null);
+  assert.strictEqual(quantity.parseQuantity('Milk $3.49 9.3\u00a2 per 100 ml'), null);
+  const tin = quantity.parseQuantity('Heinz Beans 415g £2.50 £0.83/100 g');
+  close(tin.amount, 415);
+  assert.strictEqual(tin.flags.indexOf('multiple-sizes'), -1);
+});
+
+test('decimal commas and dropped leading zeros', () => {
+  close(quantity.parseQuantity('Riz basmati 1,5 kg').amount, 1.5 * KG);
+  close(quantity.parseQuantity('Eau 6 x 1,5 l').amount, 9000);
+  close(quantity.parseQuantity('Water .5 L bottle').amount, 500);
+  close(quantity.parseQuantity('Spice (.75 oz)').amount, 0.75 * OZ);
+  // Grouping commas and lists are untouched.
+  close(quantity.parseQuantity('Rice 1,500 g').amount, 1500);
+  close(quantity.parseQuantity('Pack of 3, 12 oz').amount, 12 * OZ);
+});

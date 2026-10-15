@@ -66,3 +66,57 @@ test('storage absent: load and save degrade quietly', async () => {
   await settings.save({ basis: 'kg' });
   assert.strictEqual(typeof settings.subscribe(() => {}), 'function');
 });
+
+test('switching unit converts every saved limit within a dimension', () => {
+  // Regression: the number used to stay put, so "$3/lb" became "$3/kg" - a
+  // limit 2.2 times stricter than the one the user chose.
+  let s = settings.setThreshold(settings.sanitize({}), 'USD', 3);
+  s = settings.setThreshold(s, 'GBP', 2);
+  const kg = settings.setBasis(s, 'kg');
+  assert.strictEqual(kg.basis, 'kg');
+  assert.strictEqual(kg.thresholds.USD, 6.614);
+  assert.strictEqual(kg.thresholds.GBP, 4.409);
+  assert.strictEqual(kg.threshold, 4.409, 'the unscoped limit follows the last one typed');
+
+  const oz = settings.setBasis(s, 'oz');
+  assert.strictEqual(oz.thresholds.USD, 0.1875);
+  assert.strictEqual(settings.setBasis(kg, 'lb').thresholds.USD, 3, 'round trip is exact');
+  assert.strictEqual(settings.setBasis(s, 'g100').thresholds.USD, 0.6614);
+});
+
+test('switching between weight and volume keeps the number', () => {
+  const s = settings.setThreshold(settings.sanitize({}), 'USD', 3);
+  assert.strictEqual(settings.setBasis(s, 'l').thresholds.USD, 3);
+  assert.strictEqual(settings.setBasis(s, 'nonsense').basis, 'lb');
+  const snapshot = JSON.stringify(s);
+  settings.setBasis(s, 'kg');
+  assert.strictEqual(JSON.stringify(s), snapshot, 'input is not modified');
+});
+
+test('a currency with no saved limit starts from the default in the current unit', () => {
+  assert.strictEqual(settings.thresholdFor(settings.sanitize({ basis: 'lb' }), 'USD'), 3);
+  assert.strictEqual(settings.thresholdFor(settings.sanitize({ basis: 'kg' }), 'USD'), 6.614);
+  assert.strictEqual(settings.thresholdFor(settings.sanitize({ basis: 'l' }), 'USD'), 3);
+  assert.strictEqual(settings.thresholdFor(settings.sanitize({ basis: 'floz' }), 'USD'), 0.08872);
+});
+
+test('an invalidated extension context degrades quietly', async () => {
+  const explode = () => { throw new Error('Extension context invalidated.'); };
+  globalThis.chrome = {
+    storage: { sync: { get: explode, set: explode }, onChanged: { addListener: explode } },
+    runtime: {}
+  };
+  try {
+    assert.strictEqual(settings.contextAlive(), false);
+    assert.deepStrictEqual(await settings.load(), settings.sanitize(null));
+    await settings.save({ basis: 'kg' });
+    assert.strictEqual(typeof settings.subscribe(() => {}), 'function');
+
+    globalThis.chrome.runtime.id = 'test-extension';
+    assert.strictEqual(settings.contextAlive(), true);
+    assert.deepStrictEqual(await settings.load(), settings.sanitize(null));
+    await settings.save({ basis: 'kg' });
+  } finally {
+    delete globalThis.chrome;
+  }
+});

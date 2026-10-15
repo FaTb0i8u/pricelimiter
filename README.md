@@ -1,8 +1,9 @@
 # Unit Price Filter
 
 A Chrome extension (Manifest V3) that annotates every search result on **Google
-Shopping, Amazon and Walmart** with its **price per pound / kilogram / litre /
-fluid ounce**, and hides the ones above a threshold you set.
+Shopping, Amazon and Walmart** with its **price per pound / kilogram / ounce /
+100 g / litre / fluid ounce / 100 ml**, and hides the ones above a threshold
+you set.
 
 Every one of these stores lets you filter by price, but not by size — so a 5 lb
 bag at \$18 and a 12 oz bag at \$9 look comparable when they are not. This
@@ -22,9 +23,12 @@ No build step. No runtime dependencies. No server. Nothing to install.
    `amazon.com/s?k=coffee+beans`, or `walmart.com/search?q=coffee+beans`
 
 The panel appears bottom-right; drag it by its title bar and it snaps to the
-nearest corner. The toolbar button hides/shows it. Every setting, including
-per-currency limits, is also on the options page (right-click the toolbar
-button → **Options**, or **Settings** in the panel).
+nearest corner. The toolbar button, or **Alt+Shift+U**, hides/shows it; on a
+tab where the extension cannot run, the button opens a page explaining where it
+works. While hiding is on, the toolbar icon shows how many results are hidden
+on that tab. Every setting, including per-currency limits, is also on the
+options page (right-click the toolbar button → **Options**, or **Settings** in
+the panel).
 
 > Publishing to the Chrome Web Store requires a **one-time \$5 developer
 > registration fee**. Loading unpacked, as above, is free forever.
@@ -89,9 +93,26 @@ and accepts only explicit structured product metadata such as Schema.org
 Shopping links to third-party merchants that are intentionally outside the
 extension's permissions are left untouched.
 
+After a lookup the panel reports how many of the pages it read declared a size,
+so "found nothing" is distinguishable from "did nothing".
+
 Price limits are saved separately for each detected currency. A limit set on a
 US storefront is not silently reused for Canadian dollars, pounds, or Australian
 dollars.
+
+Limits are numbers *per the chosen unit*, so changing the unit converts them:
+\$3/lb becomes \$6.614/kg or \$0.1875/oz, keeping exactly the same results
+hidden. Switching between weight and volume leaves the number alone, since a
+per-pound limit has no per-litre equivalent. Items measured the other way are
+badged in the paired unit — litres beside pounds or kilograms, fluid ounces
+beside ounces, 100 ml beside 100 g.
+
+### After an update
+
+Chrome does not re-inject content scripts into tabs that were already open, and
+the old script loses its connection to storage. It keeps filtering from memory,
+but the panel says **Extension updated – reload this page to save changes**
+instead of silently dropping edits.
 
 ### Verifying the DOM adapter
 
@@ -138,6 +159,7 @@ price text node  ──▶  walk up to the card  ──▶  merchant unit price?
 | `src/common/settings.js` | `chrome.storage.sync` persistence + input sanitising |
 | `src/common/verdict.js` | Pass/fail/n.a. rules, sort order, locale-aware money formatting |
 | `src/common/history.js` | Lowest-price-seen history in `chrome.storage.local` |
+| `src/common/product-data.js` | Sizes from a product page's Schema.org data, for the size lookup |
 | `src/content/sites.js` | Per-store profiles: host match, results-page test, selectors, currency |
 | `src/content/site-adapter.js` | Locating product cards in each store's DOM |
 | `src/content/panel.js` | Shadow-DOM control panel |
@@ -242,6 +264,10 @@ with `?`. `"2 x 5 lb"` and `"16 oz each"` are explicit and *are* multiplied.
 | --- | --- | --- |
 | `$139.99  $28/lb` | item \$139.99, unit \$28/lb | The `/lb` figure is a unit price, not the item price |
 | `$3.00/ct` | shown, never filtered | Per-count is not per-weight; comparing them would mislead |
+| `£2.50 (£0.83/100 g)` | item £2.50, unit £0.83 per 100 g | The denominator's number is part of the unit; without it £0.83 was read as the item price |
+| `$3.98 14.8 ¢/oz` | unit \$0.148/oz | Walmart writes cheap unit prices in cents |
+| `Beans 415g £0.83/100 g` | 415 g | "100 g" after a unit price is what it is quoted per, not the pack size |
+| `Riz 1,5 kg`, `Water .5 L` | 1.5 kg, 0.5 L | Decimal commas and dropped leading zeros |
 | `92 fl oz` | volume, not mass | `fl oz` ≠ `oz`; conflating them is the most damaging possible error |
 | `Vitamin C 1000 mg, 250 Tablets` | unknown | `mg` on a shopping title is a dose, not net weight |
 | `30 g per serving` | unknown | A serving is a dose; it says nothing about pack size |
@@ -456,10 +482,11 @@ anywhere the content script runs.
 | `storage` | Remembers your threshold and unit |
 | `*://*.google.com/*` | Content script runs on Google search/shopping only |
 | `*://*.amazon.com/*` (+ `.co.uk`, `.ca`, `.com.au`) | Amazon search results |
-| `*://*.walmart.com/*` (+ `.ca`) | Walmart search and browse pages |
+| `*://*.walmart.com/*` (+ `.ca`) | Walmart search, browse, shop and category pages (walmart.ca under its `/en/` and `/fr/` paths) |
 
-Every host is declared explicitly. There is no `<all_urls>`, no `tabs`, no
-network requests and no analytics. Nothing leaves the browser.
+Every host is declared explicitly. There is no `<all_urls>`, no `tabs` and no
+analytics. The only network request is the optional, click-triggered package
+size lookup, which fetches product pages on these same hosts without cookies.
 
 ---
 
@@ -475,8 +502,9 @@ network requests and no analytics. Nothing leaves the browser.
   compare those — that is a different feature, on a different page.
 - **US customary volumes.** A UK fluid ounce is 28.41 ml, not 29.57 ml. Results
   on `google.co.uk` and `amazon.co.uk` will be ~4% off for `fl oz`.
-- **Size comes from the visible card only.** Product detail pages are never
-  fetched — that would be slow, rate-limited, and a privacy problem.
+- **Size comes from the visible card unless you ask.** Product detail pages are
+  fetched only by **Find package sizes**, at most eight per click, and only on
+  hosts the extension already has permission for.
 - **Many Google tiles state no total size at all.** Google frequently prints
   only "24 g per serving" or "$1.82/ct" and no net weight. Those are reported
   `no size` rather than guessed at, because multiplying a serving by an unstated
@@ -503,12 +531,12 @@ Priority order, highest first.
    fixture harness covers the known shapes, but only the live site proves it.
 2. **Grow the title corpus.** Every mis-parse found in the wild becomes a test
    case in `test/parse-quantity.test.js`. This is where accuracy comes from.
-3. **Sort by unit price.** Higher value than filtering, but requires reordering
-   Google's grid; only safe when all cards share one flex/grid parent.
-4. **Auto-activate on the All tab** when a page turns out to contain product
-   cards. Today the extension stays dormant outside the Shopping tab and the
-   toolbar button is the way in.
-5. **National Google domains** behind an options page.
+3. **National Google domains** behind an options page.
+4. **A per-count basis** (price per 100 tablets, per sheet), now that
+   `$0.13/100 Count` is parsed rather than misread.
+
+Sorting and content-based activation, formerly items 3 and 4, have shipped.
+See `TASKS.md` for the reviewed backlog and its status.
 
 Coupon scanning is **out of scope** — decided, not deferred. See below.
 

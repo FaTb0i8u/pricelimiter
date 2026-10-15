@@ -20,6 +20,7 @@
   var verdicts = PPP.verdict;
   var sites = PPP.sites;
   var historyApi = PPP.history;
+  var productData = PPP.productData;
 
   var RESCAN_DEBOUNCE_MS = 300;
   var MAX_DETAIL_LOOKUPS = 8;
@@ -42,6 +43,8 @@
     bestCard: null,
     currency: null,
     detailLookupBusy: false,
+    /** {tried, found} from the last package-size lookup on this page. */
+    lastLookup: null,
     lastStats: null,
     // Set by each scan when the URL test fails but the page turns out to hold
     // a results grid anyway. See scan().
@@ -50,7 +53,9 @@
     // compared with itself. Null while loading or when switched off.
     priceHistory: null,
     pendingPrices: new Map(),
-    historyTimer: null
+    historyTimer: null,
+    // Last text sent for the toolbar icon; '' is what a fresh tab shows.
+    toolbarBadge: ''
   };
 
   /** Per-element memo of the expensive parse work. */
@@ -340,6 +345,10 @@
     badge.setAttribute('data-ppp-state', verdict.state);
     clearBest(card); // re-awarded below, once per scan
     badge.title = buildTooltip(data, verdict, past);
+    if (verdict.state === 'unknown' && settings.filterEnabled && !settings.hideUnknown) {
+      badge.title += '\nNot hidden: without a size it can\u2019t be priced per unit. ' +
+        'Tick \u201cAlso hide items with no listed size\u201d to hide these.';
+    }
 
     card.setAttribute('data-ppp-card', '');
     card.setAttribute('data-ppp-state', verdict.state);
@@ -483,6 +492,15 @@
     if (state.panel && state.settings) state.panel.render(panelView(), stats);
   }
 
+  /** The toolbar icon's count of hidden results; only sent when it changes. */
+  function updateToolbarBadge(stats) {
+    var hidden = state.settings && state.settings.filterEnabled && stats.total ? stats.total - stats.shown : 0;
+    var text = hidden > 999 ? '999+' : hidden > 0 ? String(hidden) : '';
+    if (text === state.toolbarBadge) return;
+    state.toolbarBadge = text;
+    sendToExtension({ type: 'ppp:badge', text: text });
+  }
+
   /**
    * How many cards must be on the page before content alone is enough to
    * activate. A genuine results grid has dozens; a stray price or two on an
@@ -518,6 +536,7 @@
       reset();
       state.lastStats = EMPTY_STATS;
       renderPanel(EMPTY_STATS);
+      updateToolbarBadge(EMPTY_STATS);
       return;
     }
     state.cards = cards;
@@ -534,6 +553,7 @@
     if (!state.settings) return;
     if (!isActive()) {
       renderPanel(EMPTY_STATS);
+      updateToolbarBadge(EMPTY_STATS);
       return;
     }
 
@@ -555,7 +575,7 @@
     var sortPlan = pageSettings.sortByUnitPrice ? planSort(cards) : null;
     patchPositions(cards);
 
-    var stats = { total: cards.length, shown: 0, priced: 0, unknown: 0, newLows: 0, best: null };
+    var stats = { total: cards.length, shown: 0, priced: 0, unknown: 0, unsizedShown: 0, newLows: 0, best: null };
     var bestVerdict = null;
     var i;
     state.bestCard = null;
@@ -566,6 +586,7 @@
       if (histories[i] && histories[i].isNewLow) stats.newLows++;
 
       if (!hidden) stats.shown++;
+      if (!hidden && verdict.state === 'unknown') stats.unsizedShown++;
       if (verdict.state === 'unknown') stats.unknown++;
       if (verdict.state === 'pass' || verdict.state === 'fail') {
         stats.priced++;
@@ -589,7 +610,10 @@
     var sortedGroups = sortPlan ? applySort(sortPlan, cardVerdicts) : 0;
 
     stats.currencySymbol = verdicts.currencySymbol(currency);
-    if (sortPlan && !sortedGroups && cards.length > 1) {
+    stats.limitLabel = verdicts.formatMoney(pageSettings.threshold, currency);
+    if (orphaned()) {
+      stats.hint = 'Extension updated \u2013 reload this page to save changes.';
+    } else if (sortPlan && !sortedGroups && cards.length > 1) {
       stats.hint = 'This page\u2019s layout can\u2019t be reordered.';
     } else if (!adapter.isShoppingSurface()) {
       stats.hint = 'Not a recognised results page \u2013 results may be mixed.';
@@ -601,11 +625,16 @@
     for (i = 0; i < cards.length; i++) {
       if (analyses[i].productUrl && !detailAttempts.has(cards[i])) lookupCount++;
     }
-    if (lookupCount || state.detailLookupBusy) {
-      stats.detailLookup = { count: Math.min(lookupCount, MAX_DETAIL_LOOKUPS), busy: state.detailLookupBusy };
+    if (lookupCount || state.detailLookupBusy || state.lastLookup) {
+      stats.detailLookup = {
+        count: Math.min(lookupCount, MAX_DETAIL_LOOKUPS),
+        busy: state.detailLookupBusy,
+        result: state.lastLookup
+      };
     }
     state.lastStats = stats;
     renderPanel(stats);
+    updateToolbarBadge(stats);
   }
 
   /** Restore every card we hid, so the next scan measures the true layout. */
@@ -653,6 +682,10 @@
         // The toolbar override is an escape hatch for an unrecognised search
         // URL, not permission to annotate every subsequent SPA route.
         state.forced = false;
+        state.lastLookup = null;
+        // The service worker clears the toolbar count whenever the tab reports
+        // "loading", which includes pushState navigations; always resend it.
+        state.toolbarBadge = null;
         reset();
         // Products from the page just left become history for this one.
         flushHistory().then(refreshHistory);
@@ -706,6 +739,16 @@
 
   /* ------------------------------------------------------------------- glue */
 
+  /**
+   * Whether this script has outlived its extension (updated, reloaded or
+   * removed while the page stayed open). Filtering still works from memory,
+   * but nothing can be saved, so the user is told to reload. Only meaningful
+   * where chrome.* exists at all.
+   */
+  function orphaned() {
+    return typeof chrome !== 'undefined' && !!chrome.runtime && !settingsApi.contextAlive();
+  }
+
   function isActive() {
     return state.forced || adapter.isShoppingSurface() || state.contentActive;
   }
@@ -714,6 +757,12 @@
     var wasRemembering = state.settings.rememberPrices;
     // Copied because the panel may still hold this object in its debounce.
     var changes = Object.assign({}, patch);
+    if (Object.prototype.hasOwnProperty.call(changes, 'basis')) {
+      // Converts the saved limits too, so "$3/lb" becomes "$6.614/kg" rather
+      // than "$3/kg".
+      state.settings = settingsApi.setBasis(state.settings, changes.basis);
+      delete changes.basis;
+    }
     if (Object.prototype.hasOwnProperty.call(changes, 'threshold')) {
       state.settings = settingsApi.setThreshold(state.settings, state.currency, changes.threshold);
       delete changes.threshold;
@@ -727,36 +776,43 @@
     else classify();
   }
 
+  /**
+   * Message the service worker. Resolves with its reply, or null when there is
+   * no extension to talk to - including after an update has orphaned this
+   * script, when sendMessage throws rather than failing politely.
+   */
+  function sendToExtension(message) {
+    return new Promise(function (resolve) {
+      if (!settingsApi.contextAlive() || !chrome.runtime.sendMessage) {
+        resolve(null);
+        return;
+      }
+      try {
+        chrome.runtime.sendMessage(message, function (response) {
+          resolve(chrome.runtime.lastError ? null : response);
+        });
+      } catch (error) {
+        resolve(null);
+      }
+    });
+  }
+
   function openOptions() {
-    if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.sendMessage) return;
     // Content scripts cannot call openOptionsPage() themselves.
-    chrome.runtime.sendMessage({ type: 'ppp:open-options' }, function () {
-      void chrome.runtime.lastError;
+    sendToExtension({ type: 'ppp:open-options' }).then(function (response) {
+      if (!response) classify(); // shows the "reload this page" hint
     });
   }
 
   function requestProductPage(url) {
-    return new Promise(function (resolve) {
-      if (typeof chrome === 'undefined' || !chrome.runtime || !chrome.runtime.sendMessage) {
-        resolve(null);
-        return;
-      }
-      chrome.runtime.sendMessage({ type: 'ppp:fetch-product-page', url: url }, function (response) {
-        if (chrome.runtime.lastError || !response || !response.ok || typeof response.html !== 'string') {
-          resolve(null);
-          return;
-        }
-        resolve(response.html);
-      });
+    return sendToExtension({ type: 'ppp:fetch-product-page', url: url }).then(function (response) {
+      return response && response.ok && typeof response.html === 'string' ? response.html : null;
     });
   }
 
-  function structuredSizeText(value) {
-    if (typeof value === 'string' || typeof value === 'number') return String(value);
-    if (!value || typeof value !== 'object' || value.value === undefined) return '';
-    var unit = String(value.unitText || value.unitCode || '').toLowerCase();
-    var unitCodes = { lbr: 'lb', onz: 'oz', grm: 'g', kgr: 'kg', mlt: 'ml', ltr: 'l' };
-    return String(value.value) + (unitCodes[unit] || unit ? ' ' + (unitCodes[unit] || unit) : '');
+  /** A microdata value, from its `content` attribute or its text. */
+  function itemValue(el) {
+    return el ? (el.getAttribute('content') || el.textContent || '').trim() : '';
   }
 
   /** Extract only explicit structured product fields from untrusted HTML. */
@@ -765,41 +821,36 @@
     var candidates = [];
     var nodes = doc.querySelectorAll('[itemprop="weight"], meta[name="product:weight"], meta[property="product:weight"]');
     for (var i = 0; i < nodes.length; i++) {
-      candidates.push(nodes[i].getAttribute('content') || nodes[i].textContent || '');
+      var node = nodes[i];
+      // A Schema.org QuantitativeValue in microdata keeps the number and the
+      // unit in nested properties, not on the element itself.
+      if (node.hasAttribute('itemscope')) {
+        candidates.push(productData.structuredSizeText({
+          value: itemValue(node.querySelector('[itemprop="value"]')),
+          unitCode: itemValue(node.querySelector('[itemprop="unitCode"]')),
+          unitText: itemValue(node.querySelector('[itemprop="unitText"]'))
+        }));
+      } else {
+        candidates.push(itemValue(node));
+      }
     }
     var scripts = doc.querySelectorAll('script[type="application/ld+json"]');
-    function visit(value) {
-       if (!value || typeof value !== 'object') return;
-       if (Array.isArray(value)) {
-         for (var j = 0; j < value.length; j++) visit(value[j]);
-         return;
-       }
-       if (value.weight) candidates.push(structuredSizeText(value.weight));
-       var properties = value.additionalProperty;
-       if (properties && !Array.isArray(properties)) properties = [properties];
-       if (properties) {
-         for (var k = 0; k < properties.length; k++) {
-           var property = properties[k] || {};
-           if (/^(?:net )?(?:weight|volume)|package (?:weight|size)$/i.test(property.name || '')) {
-             candidates.push(structuredSizeText(property.value));
-           }
-         }
-       }
-       Object.keys(value).forEach(function (key) {
-         if (key !== 'weight' && key !== 'additionalProperty') visit(value[key]);
-       });
-    }
     for (var s = 0; s < scripts.length; s++) {
-      try { visit(JSON.parse(scripts[s].textContent)); } catch (error) { /* invalid vendor JSON */ }
+      try {
+        candidates.push.apply(candidates, productData.sizesFromJsonLd(JSON.parse(scripts[s].textContent)));
+      } catch (error) {
+        /* invalid vendor JSON */
+      }
     }
     return candidates;
   }
 
   /** Fetch one card's product page and keep the first explicit size it declares. */
+  /** @returns {Promise<boolean>} whether a size was found */
   async function lookUpPackageSize(candidate) {
     detailAttempts.add(candidate.card);
     var html = await requestProductPage(candidate.url);
-    if (!html) return;
+    if (!html) return false;
     var values = detailSizeCandidates(html);
     for (var k = 0; k < values.length; k++) {
       var parsed = quantity.parseQuantity(values[k]);
@@ -808,8 +859,9 @@
       parsed.flags = parsed.flags.concat(['product-detail']);
       detailQuantities.set(candidate.card, parsed);
       analysisCache.delete(candidate.card);
-      return;
+      return true;
     }
+    return false;
   }
 
   async function findPackageSizes() {
@@ -822,11 +874,19 @@
     }
     if (!queue.length) return;
 
+    var result = { tried: queue.length, found: 0 };
     async function worker() {
-      while (queue.length) await lookUpPackageSize(queue.shift());
+      while (queue.length) {
+        try {
+          if (await lookUpPackageSize(queue.shift())) result.found++;
+        } catch (error) {
+          // One malformed page must not abandon the rest of the queue.
+        }
+      }
     }
 
     state.detailLookupBusy = true;
+    state.lastLookup = null;
     // classify() rather than re-rendering the last stats, which predate the
     // busy flag and would leave the button enabled mid-lookup.
     classify();
@@ -839,8 +899,11 @@
       // panel would stay on "Looking for package sizes..." with the button
       // disabled for the rest of the page's life.
       state.detailLookupBusy = false;
+      // Without a result the button simply vanished or came back, and a
+      // lookup that found nothing was indistinguishable from one that failed.
+      state.lastLookup = result;
+      classify();
     }
-    classify();
   }
 
   function jumpToBest() {
@@ -906,6 +969,13 @@
     }
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState === 'hidden') flushHistory();
+    });
+    // A page restored from the back/forward cache keeps this script's state,
+    // but the service worker cleared the toolbar count when the tab moved on.
+    window.addEventListener('pageshow', function (event) {
+      if (!event.persisted) return;
+      state.toolbarBadge = null;
+      classify();
     });
 
     startObserver();

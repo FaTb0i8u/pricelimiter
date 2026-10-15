@@ -21,6 +21,12 @@
     "page": "src/options/options.html",
     "open_in_tab": true
   },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": { "default": "Alt+Shift+U" },
+      "description": "Show or hide the unit price panel"
+    }
+  },
   "action": {
     "default_title": "Toggle the unit price filter panel",
     "default_icon": {
@@ -49,8 +55,17 @@
         "*://www.walmart.com/search*",
         "*://www.walmart.com/browse/*",
         "*://www.walmart.com/shop/*",
+        "*://www.walmart.com/cp/*",
         "*://www.walmart.ca/search*",
-        "*://www.walmart.ca/browse/*"
+        "*://www.walmart.ca/browse/*",
+        "*://www.walmart.ca/en/search*",
+        "*://www.walmart.ca/fr/search*",
+        "*://www.walmart.ca/en/browse/*",
+        "*://www.walmart.ca/fr/browse/*",
+        "*://www.walmart.ca/en/shop/*",
+        "*://www.walmart.ca/fr/shop/*",
+        "*://www.walmart.ca/en/cp/*",
+        "*://www.walmart.ca/fr/cp/*"
       ],
       "js": [
         "src/common/units.js",
@@ -59,6 +74,7 @@
         "src/common/settings.js",
         "src/common/verdict.js",
         "src/common/history.js",
+        "src/common/product-data.js",
         "src/content/sites.js",
         "src/content/site-adapter.js",
         "src/content/panel.js",

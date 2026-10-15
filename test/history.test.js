@@ -124,7 +124,7 @@ function fakeStorage() {
 
 test('record merges with what another tab wrote meanwhile', async () => {
   const local = fakeStorage();
-  globalThis.chrome = { storage: { local }, runtime: { lastError: undefined } };
+  globalThis.chrome = { storage: { local }, runtime: { id: 'test-extension', lastError: undefined } };
   try {
     await history.record([{ key: 'USD|mass|tab one product', price: 1, site: 'Amazon' }], NOW);
     // Another tab writes directly between two flushes from this one.
@@ -148,4 +148,24 @@ test('without extension storage everything is a quiet no-op', async () => {
   assert.deepStrictEqual(await history.load(), {});
   await history.record([{ key: 'USD|mass|anything at all', price: 1, site: 'x' }]);
   await history.clear();
+});
+
+test('an invalidated extension context is a quiet no-op, not a throw', async () => {
+  // After an update the old content script keeps running, `runtime.id`
+  // disappears, and every storage call throws.
+  const explode = () => { throw new Error('Extension context invalidated.'); };
+  globalThis.chrome = { storage: { local: { get: explode, set: explode, remove: explode } }, runtime: {} };
+  try {
+    assert.deepStrictEqual(await history.load(), {});
+    await history.record([{ key: 'USD|mass|anything at all', price: 1, site: 'x' }]);
+    await history.clear();
+
+    // Context still claims to be alive, but the call throws anyway (a race).
+    globalThis.chrome.runtime.id = 'test-extension';
+    assert.deepStrictEqual(await history.load(), {});
+    await history.record([{ key: 'USD|mass|anything at all', price: 1, site: 'x' }]);
+    await history.clear();
+  } finally {
+    delete globalThis.chrome;
+  }
 });

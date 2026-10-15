@@ -10,6 +10,9 @@
 
 [data-ppp-card] {
   transition: opacity 120ms ease-in-out;
+  /* Confines the badge's z-index to its own card, so it still beats in-card
+     layers but no longer paints over the store's product sheets and modals. */
+  isolation: isolate;
 }
 
 .ppp-badge {

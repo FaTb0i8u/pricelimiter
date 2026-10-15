@@ -60,7 +60,13 @@ test('results pages are told apart from the rest of each store', () => {
     'https://www.amazon.com/s?k=whey+protein',
     'https://www.amazon.com/gp/search?keywords=whey',
     'https://www.walmart.com/search?q=whey',
-    'https://www.walmart.com/browse/food/protein/1234'
+    'https://www.walmart.com/browse/food/protein/1234',
+    'https://www.walmart.com/cp/coffee/1086446',
+    // walmart.ca redirects "/search" to a language-prefixed path.
+    'https://www.walmart.ca/en/search?q=coffee',
+    'https://www.walmart.ca/fr/search?q=cafe',
+    'https://www.walmart.ca/en/browse/grocery/drinks/10019_6000194326336',
+    'https://www.walmart.ca/en/cp/grocery/10019'
   ];
   const no = [
     'https://www.google.com/search?q=whey',
@@ -68,7 +74,9 @@ test('results pages are told apart from the rest of each store', () => {
     'https://www.amazon.com/dp/B072M8GTXW',
     'https://www.amazon.com/gp/cart/view.html',
     'https://www.walmart.com/ip/Some-Product/12345',
-    'https://www.walmart.com/cart'
+    'https://www.walmart.com/cart',
+    'https://www.walmart.ca/en/ip/some-product/6000201',
+    'https://www.walmart.ca/en/help'
   ];
   for (const href of yes) assert.strictEqual(sites.isResultsPage(loc(href)), true, href);
   for (const href of no) assert.strictEqual(sites.isResultsPage(loc(href)), false, href);
@@ -110,4 +118,40 @@ test('page currency: country host, then observed prices, then USD', () => {
   // Nothing observed: known stores still get a currency to save limits under.
   assert.strictEqual(at('https://www.amazon.com/s?k=x'), 'USD');
   assert.strictEqual(at('https://example.com/'), null);
+});
+
+/** A Chrome match pattern ("*://www.amazon.com/s*") as a RegExp over a URL. */
+function matchPattern(pattern) {
+  const [, scheme, host, path] = /^(\*|https?):\/\/([^/]+)(\/.*)$/.exec(pattern);
+  const escape = (text) => text.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
+  return new RegExp('^' + (scheme === '*' ? 'https?' : scheme) + '://' + escape(host) + escape(path) + '$');
+}
+
+test('the manifest injects on every page the profiles call a results page', () => {
+  // Regression: walmart.ca moved search to "/en/search" and Walmart's "/cp/"
+  // pages were profiled as results but never injected, so the extension
+  // silently did nothing there.
+  const manifest = require('../manifest.json');
+  const patterns = manifest.content_scripts.flatMap((cs) => cs.matches).map(matchPattern);
+  const pages = [
+    'https://www.google.com/search?q=whey&udm=28',
+    'https://www.google.com/shopping/product/1',
+    'https://www.amazon.com/s?k=whey',
+    'https://www.amazon.co.uk/s?k=beans',
+    'https://www.amazon.ca/s?k=cafe',
+    'https://www.amazon.com.au/s?k=coffee',
+    'https://www.walmart.com/search?q=whey',
+    'https://www.walmart.com/browse/food/1234',
+    'https://www.walmart.com/shop/deals',
+    'https://www.walmart.com/cp/coffee/1086446',
+    'https://www.walmart.ca/en/search?q=coffee',
+    'https://www.walmart.ca/fr/search?q=cafe',
+    'https://www.walmart.ca/en/browse/grocery/10019',
+    'https://www.walmart.ca/en/shop/flash-deals',
+    'https://www.walmart.ca/en/cp/grocery/10019'
+  ];
+  for (const href of pages) {
+    assert.strictEqual(sites.isResultsPage(loc(href)), true, `profile: ${href}`);
+    assert.ok(patterns.some((re) => re.test(href)), `manifest: ${href}`);
+  }
 });

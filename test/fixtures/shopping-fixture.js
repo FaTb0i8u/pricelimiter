@@ -76,6 +76,13 @@ const CARDS = [
   {
     title: "Nutricost Whey Protein Isolate 5 lb", price: "$44.99", unit: "$1.87/ct",
     merchant: "Nutricost"
+  },
+
+  // Walmart grid tile. See `walmartGridCard`. Expected: $5.92 read as the
+  // price, and 14.8 cents/oz as the unit price, i.e. $2.37/lb.
+  {
+    title: "SKIPPY Creamy Peanut Butter, 40 oz", price: "$5.92", was: "$7.17",
+    unit: "14.8 \u00a2/oz", merchant: "Walmart", walmartGrid: true
   }
 ];
 
@@ -84,6 +91,7 @@ const PIXEL =
   "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
 function card(spec) {
+  if (spec.walmartGrid) return walmartGridCard(spec);
   if (spec.welded) return weldedCard(spec);
   if (spec.zeroWrap) return zeroWrapCard(spec);
   if (spec.organic) return organicCard(spec);
@@ -105,6 +113,36 @@ function card(spec) {
  */
 function weldedCard(spec) {
   return `<div class="tile"><a href="/shopping/product/2"><img class="photo" src="${PIXEL}" width="180" height="180" alt="${spec.title}"></a><a href="/shopping/product/2" role="heading" aria-level="3" class="title">${spec.title}</a><div class="price"><span>${spec.price}</span><span class="unit">${spec.unit}</span></div><div class="merchant"><img class="icon" src="${PIXEL}" width="16" height="16" alt=""><span>${spec.merchant} &amp; more</span></div><div class="rating">4.5 (11K)</div></div>`;
+}
+
+/**
+ * Walmart search tile, copied from a live results page.
+ *
+ * Two traps, both of which shipped as real bugs:
+ *   - the accessible price label is a DIRECT child of the whole tile, so its
+ *     "parent context" is every word on the card - including "Free shipping",
+ *     which rejected the only parseable price as a delivery fee (6 of 10
+ *     cards on a live page read "no price");
+ *   - the unit price is written in cents, "14.8 ¢/oz", which no price pattern
+ *     recognised.
+ */
+function walmartGridCard(spec) {
+  const parts = spec.price.replace("$", "").split(".");
+  return `
+    <div class="tile">
+      <a href="/ip/product/3">
+        <img class="photo" src="${PIXEL}" width="180" height="180" alt="${spec.title}">
+      </a>
+      <span class="sr">Price Now ${spec.price} Was ${spec.was} ${spec.unit}</span>
+      <div class="price" aria-hidden="true">
+        <span class="f6">$</span><span class="f2">${parts[0]}</span><span class="f6">${parts[1]}</span>
+        <span class="strike">${spec.was}</span>
+        <span class="unit">${spec.unit}</span>
+      </div>
+      <a href="/ip/product/3" role="heading" aria-level="3" class="title">${spec.title}</a>
+      <div class="rating">4.7 (10K)</div>
+      Free shipping, arrives in 2 days
+    </div>`;
 }
 
 /**

@@ -115,3 +115,13 @@ test('unit conversion to a filter basis', () => {
   assert.strictEqual(Math.round(perGram * units.BASES.lb.perBase * 100) / 100, 4.5);
   assert.strictEqual(Math.round(perGram * units.BASES.kg.perBase * 100) / 100, 9.92);
 });
+
+test('a decimal comma after a grouping space is still a decimal', () => {
+  // Intl writes French and other grouping with U+202F; once the space is
+  // gone "1234,56" must not be read as a grouping comma.
+  assert.strictEqual(price.parsePrice('1\u202f234,56 \u20ac').amount, 1234.56);
+  assert.strictEqual(price.parsePrice('1\u00a0234,56 \u20ac').amount, 1234.56);
+  assert.strictEqual(price.normalizeNumber('1234,5'), 1234.5);
+  assert.strictEqual(price.normalizeNumber('1,234'), 1234);
+  assert.strictEqual(price.normalizeNumber('1,234,567'), 1234567);
+});

@@ -106,3 +106,39 @@ test('sorting is stable among unsized results', () => {
   const unknown = { state: 'unknown' };
   assert.strictEqual(verdict.compareVerdicts(unknown, { state: 'unknown' }), 0);
 });
+
+test('a per-100 g merchant price is judged on its real unit price', () => {
+  // £0.83/100 g is £3.76/lb. Before the fix the card read as a £0.83 item.
+  const data = card({ itemPrice: '£2.50 (£0.83/100 g)', unitPrice: '£2.50 (£0.83/100 g)', size: 'Beans 415g' });
+  assert.strictEqual(data.price.amount, 2.5);
+  const result = verdict.evaluate(data, limit(3.5));
+  assert.strictEqual(result.source, 'site');
+  assert.strictEqual(result.state, 'fail');
+  assert.strictEqual(verdict.badgeText(result, data, 'GBP', 'en-GB'), '\u00a33.76/lb');
+});
+
+test('a Walmart cent unit price is compared like any other', () => {
+  const data = card({ itemPrice: '$3.98', unitPrice: '$3.98 11.2 \u00a2/oz', size: 'Peanut Butter 40 oz' });
+  const result = verdict.evaluate(data, limit(2));
+  assert.strictEqual(result.source, 'site');
+  assert.strictEqual(result.state, 'pass');
+  assert.strictEqual(verdict.badgeText(result, data, 'USD', 'en-US'), '$1.79/lb');
+});
+
+test('items measured the other way are shown in the paired unit', () => {
+  const drink = card({ itemPrice: '\u00a31.50', size: 'Juice 1 L' });
+  const per100g = verdict.evaluate(drink, limit(1, { basis: 'g100' }));
+  assert.strictEqual(per100g.state, 'na');
+  assert.strictEqual(verdict.badgeText(per100g, drink, 'GBP', 'en-GB'), '\u00a30.15/100 ml');
+
+  const rice = card({ itemPrice: '$10.00', size: 'Rice 5 lb' });
+  assert.strictEqual(verdict.evaluate(rice, limit(1, { basis: 'floz' })).altBase.key, 'oz');
+  assert.strictEqual(verdict.evaluate(rice, limit(1, { basis: 'l' })).altBase.key, 'kg');
+});
+
+test('a per-100 g basis reads like the shelf label', () => {
+  const data = card({ itemPrice: '\u00a32.50', size: 'Beans 415g' });
+  const result = verdict.evaluate(data, limit(0.7, { basis: 'g100' }));
+  assert.strictEqual(result.state, 'pass');
+  assert.strictEqual(verdict.badgeText(result, data, 'GBP', 'en-GB'), '\u00a30.60/100 g');
+});

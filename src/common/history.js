@@ -122,19 +122,29 @@
 
   /* ---------------------------------------------------------------- storage */
 
+  /** Null without storage, or once the extension context has been invalidated. */
   function area() {
-    return typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local
-      ? chrome.storage.local
-      : null;
+    try {
+      return typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local &&
+        chrome.runtime && chrome.runtime.id
+        ? chrome.storage.local
+        : null;
+    } catch (error) {
+      return null;
+    }
   }
 
   function read() {
     var local = area();
     if (!local) return Promise.resolve({});
     return new Promise(function (resolve) {
-      local.get(STORAGE_KEY, function (result) {
-        resolve(chrome.runtime.lastError ? {} : sanitize(result && result[STORAGE_KEY]));
-      });
+      try {
+        local.get(STORAGE_KEY, function (result) {
+          resolve(chrome.runtime.lastError ? {} : sanitize(result && result[STORAGE_KEY]));
+        });
+      } catch (error) {
+        resolve({});
+      }
     });
   }
 
@@ -144,10 +154,14 @@
     var payload = {};
     payload[STORAGE_KEY] = store;
     return new Promise(function (resolve) {
-      local.set(payload, function () {
-        void chrome.runtime.lastError;
+      try {
+        local.set(payload, function () {
+          void chrome.runtime.lastError;
+          resolve();
+        });
+      } catch (error) {
         resolve();
-      });
+      }
     });
   }
 
@@ -164,6 +178,8 @@
         var result = merge(store, observations, now || Date.now());
         return result.changed ? write(result.store) : undefined;
       });
+    }).catch(function () {
+      // One failed write must not reject every later one chained behind it.
     });
     return queue;
   }
@@ -173,10 +189,14 @@
     if (!local) return Promise.resolve();
     queue = queue.then(function () {
       return new Promise(function (resolve) {
-        local.remove(STORAGE_KEY, function () {
-          void chrome.runtime.lastError;
+        try {
+          local.remove(STORAGE_KEY, function () {
+            void chrome.runtime.lastError;
+            resolve();
+          });
+        } catch (error) {
           resolve();
-        });
+        }
       });
     });
     return queue;

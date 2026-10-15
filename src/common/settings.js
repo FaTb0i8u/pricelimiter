@@ -51,8 +51,21 @@
     { value: 0.6, label: 'Strict' }
   ];
 
+  /**
+   * False once the extension has been updated, reloaded or removed while this
+   * page stayed open. The old content script keeps running, but every
+   * chrome.* call from it throws "Extension context invalidated".
+   */
+  function contextAlive() {
+    try {
+      return typeof chrome !== 'undefined' && !!chrome.runtime && !!chrome.runtime.id;
+    } catch (error) {
+      return false;
+    }
+  }
+
   function hasStorage() {
-    return typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync;
+    return typeof chrome !== 'undefined' && !!chrome.storage && !!chrome.storage.sync && contextAlive();
   }
 
   function sanitize(raw) {
@@ -108,7 +121,54 @@
     if (!currency) return clean.threshold;
     return Object.prototype.hasOwnProperty.call(clean.thresholds, currency)
       ? clean.thresholds[currency]
-      : DEFAULTS.threshold;
+      : defaultThreshold(clean.basis);
+  }
+
+  /** Four significant figures: enough for $0.1875/oz, without float noise. */
+  function roundLimit(value) {
+    return value > 0 ? Math.min(Number(value.toPrecision(4)), 1e6) : 0;
+  }
+
+  /**
+   * The same limit expressed per another unit: $3/lb is $6.614/kg. A limit
+   * has no meaning across dimensions, so a switch from weight to volume keeps
+   * the number as it is.
+   */
+  function convertLimit(value, fromBasis, toBasis) {
+    var from = PPP.units.BASES[fromBasis];
+    var to = PPP.units.BASES[toBasis];
+    if (!from || !to || from === to || from.dimension !== to.dimension) return value;
+    return roundLimit((value * to.perBase) / from.perBase);
+  }
+
+  /**
+   * The starting limit for a currency with none saved. `DEFAULTS.threshold`
+   * is per pound; a per-volume basis starts from the same figure per litre,
+   * since $3 per fluid ounce ($101/L) would let almost anything through.
+   */
+  function defaultThreshold(basis) {
+    var base = PPP.units.BASES[basis];
+    if (!base) return DEFAULTS.threshold;
+    return convertLimit(DEFAULTS.threshold, base.dimension === 'volume' ? 'l' : 'lb', basis);
+  }
+
+  /**
+   * Change the unit limits are compared per, re-expressing every saved limit
+   * in it. Saved limits are numbers in the CURRENT basis; switching from
+   * pounds to kilograms without converting silently turned "$3/lb" into
+   * "$3/kg" - a limit 2.2 times stricter that hid results nobody chose to
+   * hide.
+   */
+  function setBasis(settings, basis) {
+    var clean = sanitize(settings);
+    if (!PPP.units.BASES[basis] || basis === clean.basis) return clean;
+    var from = clean.basis;
+    clean.threshold = convertLimit(clean.threshold, from, basis);
+    Object.keys(clean.thresholds).forEach(function (currency) {
+      clean.thresholds[currency] = convertLimit(clean.thresholds[currency], from, basis);
+    });
+    clean.basis = basis;
+    return clean;
   }
 
   function withCurrency(settings, currency) {
@@ -131,13 +191,17 @@
   function load() {
     if (!hasStorage()) return Promise.resolve(sanitize(null));
     return new Promise(function (resolve) {
-      chrome.storage.sync.get(STORAGE_KEY, function (result) {
-        if (chrome.runtime.lastError) {
-          resolve(sanitize(null));
-          return;
-        }
-        resolve(sanitize(result && result[STORAGE_KEY]));
-      });
+      try {
+        chrome.storage.sync.get(STORAGE_KEY, function (result) {
+          if (chrome.runtime.lastError) {
+            resolve(sanitize(null));
+            return;
+          }
+          resolve(sanitize(result && result[STORAGE_KEY]));
+        });
+      } catch (error) {
+        resolve(sanitize(null)); // context lost between the check and the call
+      }
     });
   }
 
@@ -146,10 +210,14 @@
     var payload = {};
     payload[STORAGE_KEY] = sanitize(settings);
     return new Promise(function (resolve) {
-      chrome.storage.sync.set(payload, function () {
-        void chrome.runtime.lastError;
+      try {
+        chrome.storage.sync.set(payload, function () {
+          void chrome.runtime.lastError;
+          resolve();
+        });
+      } catch (error) {
         resolve();
-      });
+      }
     });
   }
 
@@ -173,8 +241,12 @@
     STORAGE_KEY: STORAGE_KEY,
     sanitize: sanitize,
     thresholdFor: thresholdFor,
+    defaultThreshold: defaultThreshold,
+    convertLimit: convertLimit,
+    setBasis: setBasis,
     withCurrency: withCurrency,
     setThreshold: setThreshold,
+    contextAlive: contextAlive,
     load: load,
     save: save,
     subscribe: subscribe

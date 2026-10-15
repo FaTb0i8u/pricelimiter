@@ -192,3 +192,107 @@ under `var` hoisting, but it is exactly the class of thing a linter exists for.
   awaits each lookup in turn, so one unresponsive merchant wedged the panel on
   "Looking for package sizes…" for the life of the page. Added an 8s
   `AbortController` deadline and a `finally` that always clears the busy flag.
+
+---
+
+# Review at v0.4.0
+
+A second full pass over source, tests and two live Walmart results pages
+(walmart.com and walmart.ca, captured and replayed through the real content
+scripts). Ordered by priority; every item is **[done]** with tests where the
+logic is DOM-free, and verified in the fixture or the replayed pages otherwise.
+
+## P0 — wrong numbers, or no numbers
+
+### 24. [done] Unit prices quoted "per 100 g" were read as the item price — *verified live*
+`PER_UNIT_TAIL_RE` allowed only a bare unit after the slash. Amazon UK/CA/AU and
+walmart.ca print `£0.83/100 g` / `$4.16/100g`; Amazon US prints
+`$0.13/100 Count`. The tail failed, the unit price became an ordinary price
+candidate, and the lowest candidate wins — so a £2.50 tin was priced at £0.83.
+Worse, `100 g` was then parsed from the card text as the *pack size*: a
+walmart.ca card reading \$12.66/lb was badged **\$31.62/lb?**. The tail now
+takes an optional quantity, and the quantity parser ignores a size that is the
+denominator of a unit price.
+
+### 25. [done] Changing the unit silently changed every limit
+Limits are stored as bare numbers in the current basis. Switching lb → kg kept
+`3`, turning \$3/lb into \$3/kg (2.2× stricter). `settings.setBasis` now
+converts every saved limit within a dimension (4 significant figures, exact
+round trip), and a currency with no saved limit starts from the default in the
+current unit. Panel and options page both use it.
+
+### 26. [done] walmart.ca never activated — *verified live*
+walmart.ca 301-redirects `/search` to `/en/search`. Neither the manifest
+matches nor `isResultsPage` allowed the language prefix, so one of the three
+advertised stores silently did nothing. Walmart `/cp/` pages had the same
+problem on walmart.com. A test now asserts every results URL a profile accepts
+is also injected by the manifest.
+
+### 27. [done] Walmart cards read "no price" — *verified live*
+On Walmart the accessible price label's parent is the whole tile, and every tile
+says "Free shipping" or "Delivery". The non-price context check read the whole
+parent and rejected the real price: 6 of 10 cards on a live page. Context is
+now the text near the price when the parent is long.
+
+### 28. [done] Product-page lookup trusted "Weight Capacity"
+`/^(?:net )?(?:weight|volume)|package (?:weight|size)$/` anchors only one side
+of each alternative, so "Weight Capacity" and "Volume Discount" matched. Moved
+to the testable `src/common/product-data.js` with full anchoring, depth and
+count limits on untrusted JSON-LD, and microdata `QuantitativeValue` support.
+
+## P1 — robustness and coverage
+
+### 29. [done] Walmart's cent prices were invisible — *verified live*
+`14.8 ¢/oz` (most Walmart grocery cards) and `88¢` matched no price pattern.
+Cent amounts now parse, carry no currency of their own, and never sway the
+page's currency.
+
+### 30. [done] An extension update broke open tabs noisily
+After an update the old content script's `chrome.*` calls throw "Extension
+context invalidated". Storage and messaging now degrade quietly, the history
+write queue survives a failed write, and the panel says to reload the page.
+
+### 31. [done] The toolbar button did nothing on unsupported tabs
+It now opens the options page with a note on where the extension works and a
+hint to reload pages opened before install or update.
+
+### 32. [done] The panel could run off a short window
+With the guide open the panel is ~730 px tall and had no max height, so on a
+laptop the header — and the close button — went off-screen. The body now
+scrolls within the viewport.
+
+### 33. [done] Finish the "unsized results still showing" note
+The uncommitted work at the start of this pass (panel note with a one-click
+fix, tooltip explanation, `isolation: isolate` on cards) was reviewed and
+verified in the fixture.
+
+## P2 — product and UX
+
+### 34. [done] Per-100 g and per-100 ml bases
+How UK, Canadian and Australian shelves quote unit prices. Items measured the
+other way are now badged in a paired unit (100 ml beside 100 g, fl oz beside
+oz, kg beside L) instead of always lb or L.
+
+### 35. [done] Package-size lookup gave no result
+The button just disappeared. The panel now reports "Found 2 package sizes on 4
+product pages" / "No package sizes found…", and one failing page no longer
+abandons the rest of the queue.
+
+### 36. [done] Product pages were downloaded whole, then truncated
+The service worker now streams the body and stops at 300 KB, and skips
+non-HTML responses.
+
+### 37. [done] Keyboard shortcut and toolbar count
+`Alt+Shift+U` toggles the panel (shown, and changeable, on the options page).
+While hiding is on, the toolbar icon shows how many results are hidden on that
+tab.
+
+### 38. [done] Small UX fixes
+The options page says which unit limits are per; a cleared threshold box is
+restored on blur instead of left blank; the guide formats the limit as money.
+
+## P3 — latent parsing gaps
+
+### 39. [done] `1,5 kg`, `.5 L` and `1 234,56 €`
+Decimal-comma sizes (amazon.ca in French), dropped leading zeros, and a decimal
+comma after a U+202F grouping space (read as 123456) all parse correctly.
