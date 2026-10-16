@@ -56,8 +56,20 @@ function setTabBadge(tabId, text) {
 
 /** A merchant page that has not answered in this long is not worth waiting for. */
 const FETCH_TIMEOUT_MS = 8000;
-/** Characters of a product page kept; structured data sits near the top. */
-const MAX_PAGE_CHARS = 300000;
+/**
+ * Characters of a product page kept; streaming stops there, so the rest is
+ * never downloaded. Measured on live pages, the parts read sit well past the
+ * old 300 KB cap. Walmart's product JSON runs from about 1 MB to the very end
+ * of a 1.5-2 MB page, so the whole page is needed. Amazon pages are about
+ * 3 MB, but the title and price block sit 520-720 KB in, so Amazon stops
+ * earlier.
+ */
+const MAX_PAGE_CHARS = 3000000;
+const AMAZON_PAGE_CHARS = 1200000;
+const AMAZON_HOST_RE = /(^|\.)amazon\.[a-z.]+$/i;
+
+/** Where stores send a request they have decided is a bot. */
+const BLOCK_PATH_RE = /^\/(?:blocked|errors\/validateCaptcha)/i;
 
 /**
  * The first `limit` characters of a response body, without downloading the
@@ -94,10 +106,10 @@ function isPermitted(origin) {
 async function fetchProductPage(url) {
   if (!(await isPermitted(url.origin))) return { ok: false, reason: 'permission-unavailable' };
 
-  // Without a deadline a merchant that accepts the connection and then never
-  // answers leaves this promise pending forever. The content script awaits
-  // each lookup in turn, so one such host wedges the panel on "Looking for
-  // package sizes..." with no way back short of a reload.
+  // Without a deadline a store that accepts the connection and then never
+  // answers leaves this promise pending forever, and the panel would sit on
+  // "Checking product pages..." with no way back short of a reload. The
+  // deadline covers streaming the body as well as the headers.
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -107,6 +119,16 @@ async function fetchProductPage(url) {
       signal: controller.signal
     });
     if (!response.ok) return { ok: false, reason: 'http-' + response.status };
+
+    let finalPath = '';
+    try {
+      finalPath = new URL(response.url || url.href).pathname;
+    } catch (error) {
+      /* checked again below */
+    }
+    // Reported distinctly so the content script stops asking, rather than
+    // treating a bot check as one more page with no size on it.
+    if (BLOCK_PATH_RE.test(finalPath)) return { ok: false, reason: 'blocked' };
 
     // The permission check above only covered the URL we asked for. A redirect
     // moves the response to an origin nobody has approved, so the origin that
@@ -126,7 +148,8 @@ async function fetchProductPage(url) {
     const type = response.headers.get('content-type') || '';
     if (type && !/html|xml/i.test(type)) return { ok: false, reason: 'not-html' };
 
-    return { ok: true, html: await readCapped(response, MAX_PAGE_CHARS) };
+    const limit = AMAZON_HOST_RE.test(new URL(response.url || url.href).hostname) ? AMAZON_PAGE_CHARS : MAX_PAGE_CHARS;
+    return { ok: true, html: await readCapped(response, limit) };
   } catch (error) {
     return { ok: false, reason: 'fetch-failed' };
   } finally {

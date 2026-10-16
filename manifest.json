@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Unit Price Filter",
   "version": "0.4.0",
-  "description": "Filter Google, Amazon and Walmart results by price per pound, kilogram, litre or fluid ounce.",
+  "description": "Filter Google, Amazon and Walmart results by price per pound, kilogram, litre or fluid ounce, and show only free offers on Aisle.",
   "minimum_chrome_version": "102",
   "permissions": ["storage"],
   "host_permissions": [
@@ -81,6 +81,12 @@
         "src/content/main.js"
       ],
       "css": ["src/content/content.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://discover.gotoaisle.com/*"],
+      "js": ["src/common/offer-classifier.js", "src/content/aisle-offers.js"],
+      "css": ["src/content/aisle-offers.css"],
       "run_at": "document_idle"
     }
   ]

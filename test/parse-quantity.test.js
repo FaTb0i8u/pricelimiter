@@ -164,3 +164,16 @@ test('decimal commas and dropped leading zeros', () => {
   close(quantity.parseQuantity('Rice 1,500 g').amount, 1500);
   close(quantity.parseQuantity('Pack of 3, 12 oz').amount, 12 * OZ);
 });
+
+test('nutrition claims in card copy are not pack sizes', () => {
+  // Live Amazon tile: the claims made "5 lb" look like one of three sizes.
+  const tub = quantity.parseQuantity('Dymatize ISO100, 25g of Protein, 5.5g BCAAs, 5 lb');
+  close(tub.amount, 5 * LB);
+  assert.strictEqual(tub.flags.indexOf('multiple-sizes'), -1);
+  close(quantity.parseQuantity('Granola 10g fiber 12 oz bag').amount, 12 * OZ);
+  assert.strictEqual(quantity.parseQuantity('Shake, 30g protein, 0g sugar'), null);
+  // Product names, and gram figures too large to be a claim, still count.
+  close(quantity.parseQuantity('MyProtein 500g Protein Powder').amount, 500);
+  close(quantity.parseQuantity('Bars 12 x 60g Protein Bars').amount, 720);
+  close(quantity.parseQuantity('Isolate 1kg protein').amount, KG);
+});

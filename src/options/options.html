@@ -30,11 +30,12 @@
 
     <section class="card welcome" id="unsupported" aria-labelledby="h-unsupported" hidden>
       <h2 id="h-unsupported">Nothing to filter on that tab</h2>
-      <p>The unit price panel appears on search results at Google Shopping, Amazon and Walmart. If you were already on one of those pages, reload it: pages opened before the extension was installed or updated can’t be reached until they are.</p>
+      <p>The unit price panel appears on search results at Google Shopping, Amazon and Walmart, and the free offers filter on Aisle’s offers page. If you were already on one of those pages, reload it: pages opened before the extension was installed or updated can’t be reached until they are.</p>
       <ul class="try">
         <li><a href="https://www.google.com/search?q=coffee+beans&amp;udm=28" target="_blank" rel="noopener">Google Shopping</a></li>
         <li><a href="https://www.amazon.com/s?k=coffee+beans" target="_blank" rel="noopener">Amazon</a></li>
         <li><a href="https://www.walmart.com/search?q=coffee+beans" target="_blank" rel="noopener">Walmart</a></li>
+        <li><a href="https://discover.gotoaisle.com/offers" target="_blank" rel="noopener">Aisle offers</a></li>
       </ul>
     </section>
 
@@ -88,6 +89,10 @@
         <select id="minConfidence"></select>
       </div>
       <p class="help">Sizes read from product titles can be ambiguous. Stricter settings mark more of them as unknown instead of guessing.</p>
+      <label class="check">
+        <input type="checkbox" id="autoLookup">
+        <span>Look up missing prices and sizes automatically<small>When a result doesn’t show its price or size, read its product page on Amazon or Walmart, a few at a time. Without this, the panel’s “Look up” button does it when you ask. Google Shopping links to other stores, which the extension has no permission to read.</small></span>
+      </label>
     </section>
 
     <section class="card" aria-labelledby="h-panel">

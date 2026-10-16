@@ -120,3 +120,8 @@ test('an invalidated extension context degrades quietly', async () => {
     delete globalThis.chrome;
   }
 });
+
+test('automatic product-page lookups are opt-in', () => {
+  assert.strictEqual(settings.sanitize(null).autoLookup, false);
+  assert.strictEqual(settings.sanitize({ autoLookup: 1 }).autoLookup, true);
+});

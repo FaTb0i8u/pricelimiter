@@ -23,13 +23,22 @@
   var productData = PPP.productData;
 
   var RESCAN_DEBOUNCE_MS = 300;
-  var MAX_DETAIL_LOOKUPS = 8;
-  var DETAIL_LOOKUP_CONCURRENCY = 3;
+  /** Product pages read per click of "Look up". */
+  var MAX_LOOKUPS_PER_CLICK = 24;
+  /** Ceiling for automatic lookups on one results page, however far it scrolls. */
+  var MAX_AUTO_LOOKUPS_PER_PAGE = 48;
+  var LOOKUP_CONCURRENCY = 3;
+  /** Remembered lookups; the least recently added are forgotten beyond this. */
+  var LOOKUP_CACHE_LIMIT = 500;
   /** Kept in step with the ppp-flash animation in content.css. */
   var FLASH_DURATION_MS = 1600;
   /** How far above a card to look for the flex/grid item that can be reordered. */
   var MAX_SORT_ASCENT = 6;
   var HISTORY_FLUSH_MS = 1500;
+
+  function freshLookupState() {
+    return { busy: false, done: 0, total: 0, found: 0, finished: false, blocked: false, autoUsed: 0 };
+  }
 
   var state = {
     settings: null,
@@ -42,9 +51,14 @@
     lastUrl: location.href,
     bestCard: null,
     currency: null,
-    detailLookupBusy: false,
-    /** {tried, found} from the last package-size lookup on this page. */
-    lastLookup: null,
+    /**
+     * Product-page lookups on this results page: progress while running, the
+     * outcome afterwards. `blocked` stops further lookups until the page
+     * changes, because the store has started refusing them.
+     */
+    lookup: freshLookupState(),
+    /** Product URLs worth looking up, as of the last classify(). */
+    lookupQueue: [],
     lastStats: null,
     // Set by each scan when the URL test fails but the page turns out to hold
     // a results grid anyway. See scan().
@@ -61,8 +75,22 @@
   /** Per-element memo of the expensive parse work. */
   var analysisCache = new WeakMap();
   var positionPatched = new WeakSet();
-  var detailQuantities = new WeakMap();
-  var detailAttempts = new WeakSet();
+  /**
+   * Product-page lookups by product URL (see lookupKey): what the page said,
+   * or null when it said nothing usable. Keyed by URL rather than by card
+   * element because stores re-render their cards on scroll and filter
+   * changes, and a re-rendered card is the same product.
+   */
+  var lookups = new Map();
+  /** Keys being fetched right now, so they are not offered a second time. */
+  var pendingLookups = new Set();
+  /**
+   * After a store refuses lookups, none are made from this tab until then
+   * (epoch ms). Per tab rather than per results page: moving to the next page
+   * of the same store is not a reason to try again straight away.
+   */
+  var lookupsPausedUntil = 0;
+  var LOOKUP_PAUSE_MS = 10 * 60 * 1000;
 
   /* ---------------------------------------------------------------- analyse */
 
@@ -116,21 +144,39 @@
         if (parsed) quantitySource = 'url';
       }
     }
-    if (!parsed && detailQuantities.has(card)) {
-      parsed = detailQuantities.get(card);
-      quantitySource = 'product page';
+    var productUrl = adapter.extractProductUrl(card);
+    var priceSource = '';
+    var unitPriceSource = '';
+
+    // What the product page said, if it has been looked up. It only fills
+    // gaps: anything the card itself shows is what the shopper is looking at.
+    var found = productUrl ? lookups.get(lookupKey(productUrl)) : null;
+    if (found) {
+      if (!priceInfo && found.price) {
+        priceInfo = found.price;
+        priceSource = 'product page';
+      }
+      if (!isComparableUnitPrice(unitPriceInfo) && found.unitPrice) {
+        unitPriceInfo = found.unitPrice;
+        unitPriceSource = 'product page';
+      }
+      if (found.quantity && (!parsed || (parsed.confidence < 0.6 && found.quantity.confidence > parsed.confidence))) {
+        parsed = Object.assign({}, found.quantity, { flags: found.quantity.flags.slice() });
+        quantitySource = 'product page';
+      }
     }
 
     var data = {
       title: title,
       price: priceInfo,
+      priceSource: priceSource,
       unitPrice: unitPriceInfo,
+      unitPriceSource: unitPriceSource,
       quantity: parsed,
       quantitySource: quantitySource,
       pricePerCanonical:
         priceInfo && parsed && parsed.amount > 0 ? priceInfo.amount / parsed.amount : null,
-      // Only unsized cards are candidates for a product-page lookup.
-      productUrl: parsed ? '' : adapter.extractProductUrl(card)
+      productUrl: productUrl
     };
 
     analysisCache.set(card, { signature: signature, data: data });
@@ -621,20 +667,25 @@
       stats.hint = '';
     }
 
-    var lookupCount = 0;
-    for (i = 0; i < cards.length; i++) {
-      if (analyses[i].productUrl && !detailAttempts.has(cards[i])) lookupCount++;
-    }
-    if (lookupCount || state.detailLookupBusy || state.lastLookup) {
+    state.lookupQueue = lookupCandidates(cards, analyses, cardVerdicts);
+    var lookup = state.lookup;
+    // A refusal on an earlier page of this tab still applies here.
+    if (!lookup.busy && Date.now() < lookupsPausedUntil) lookup.blocked = true;
+    if (state.lookupQueue.length || lookup.busy || lookup.finished || lookup.blocked) {
       stats.detailLookup = {
-        count: Math.min(lookupCount, MAX_DETAIL_LOOKUPS),
-        busy: state.detailLookupBusy,
-        result: state.lastLookup
+        count: lookup.blocked ? 0 : Math.min(state.lookupQueue.length, MAX_LOOKUPS_PER_CLICK),
+        busy: lookup.busy,
+        done: lookup.done,
+        total: lookup.total,
+        result: lookup.finished ? { tried: lookup.total, found: lookup.found } : null,
+        blocked: lookup.blocked ? adapter.currentSite().label : '',
+        auto: !!state.settings.autoLookup
       };
     }
     state.lastStats = stats;
     renderPanel(stats);
     updateToolbarBadge(stats);
+    maybeAutoLookup();
   }
 
   /** Restore every card we hid, so the next scan measures the true layout. */
@@ -682,7 +733,8 @@
         // The toolbar override is an escape hatch for an unrecognised search
         // URL, not permission to annotate every subsequent SPA route.
         state.forced = false;
-        state.lastLookup = null;
+        state.lookup = freshLookupState();
+        state.lookupQueue = [];
         // The service worker clears the toolbar count whenever the tab reports
         // "loading", which includes pushState navigations; always resend it.
         state.toolbarBadge = null;
@@ -804,106 +856,222 @@
     });
   }
 
+  /** @returns {Promise<{html: string|null, reason: string}>} */
   function requestProductPage(url) {
     return sendToExtension({ type: 'ppp:fetch-product-page', url: url }).then(function (response) {
-      return response && response.ok && typeof response.html === 'string' ? response.html : null;
+      if (response && response.ok && typeof response.html === 'string') return { html: response.html, reason: '' };
+      return { html: null, reason: (response && response.reason) || 'no-extension' };
     });
   }
 
-  /** A microdata value, from its `content` attribute or its text. */
-  function itemValue(el) {
-    return el ? (el.getAttribute('content') || el.textContent || '').trim() : '';
+  /* ---------------------------------------------------------------- lookups */
+
+  /**
+   * One key per product, however the store decorates its links: Amazon's
+   * "/Some-Slug/dp/B000GISTZ4/ref=sr_1_5?..." and "/dp/B000GISTZ4" are the
+   * same page, and Walmart's "?classType=VARIANT&from=/search" changes
+   * nothing about the product.
+   */
+  function lookupKey(href) {
+    var url;
+    try {
+      url = new URL(href, location.href);
+    } catch (error) {
+      return href;
+    }
+    var asin = /\/(?:dp|gp\/product|gp\/aw\/d)\/([A-Z0-9]{10})(?:[/?]|$)/i.exec(url.pathname);
+    if (asin) return url.origin + '/dp/' + asin[1].toUpperCase();
+    return url.origin + url.pathname;
   }
 
-  /** Extract only explicit structured product fields from untrusted HTML. */
-  function detailSizeCandidates(html) {
-    var doc = new DOMParser().parseFromString(html, 'text/html');
-    var candidates = [];
-    var nodes = doc.querySelectorAll('[itemprop="weight"], meta[name="product:weight"], meta[property="product:weight"]');
-    for (var i = 0; i < nodes.length; i++) {
-      var node = nodes[i];
-      // A Schema.org QuantitativeValue in microdata keeps the number and the
-      // unit in nested properties, not on the element itself.
-      if (node.hasAttribute('itemscope')) {
-        candidates.push(productData.structuredSizeText({
-          value: itemValue(node.querySelector('[itemprop="value"]')),
-          unitCode: itemValue(node.querySelector('[itemprop="unitCode"]')),
-          unitText: itemValue(node.querySelector('[itemprop="unitText"]'))
-        }));
-      } else {
-        candidates.push(itemValue(node));
-      }
-    }
-    var scripts = doc.querySelectorAll('script[type="application/ld+json"]');
-    for (var s = 0; s < scripts.length; s++) {
-      try {
-        candidates.push.apply(candidates, productData.sizesFromJsonLd(JSON.parse(scripts[s].textContent)));
-      } catch (error) {
-        /* invalid vendor JSON */
-      }
-    }
-    return candidates;
+  function isComparableUnitPrice(unit) {
+    return !!(unit && unit.perUnit && (unit.perUnit.dimension === 'mass' || unit.perUnit.dimension === 'volume'));
   }
 
-  /** Fetch one card's product page and keep the first explicit size it declares. */
-  /** @returns {Promise<boolean>} whether a size was found */
-  async function lookUpPackageSize(candidate) {
-    detailAttempts.add(candidate.card);
-    var html = await requestProductPage(candidate.url);
-    if (!html) return false;
-    var values = detailSizeCandidates(html);
-    for (var k = 0; k < values.length; k++) {
-      var parsed = quantity.parseQuantity(values[k]);
-      if (!parsed) continue;
-      parsed.confidence = Math.min(parsed.confidence, 0.75);
-      parsed.flags = parsed.flags.concat(['product-detail']);
-      detailQuantities.set(candidate.card, parsed);
-      analysisCache.delete(candidate.card);
-      return true;
+  /**
+   * Whether a product page on this host can be fetched and read at all: one
+   * of the stores the extension already has permission for. Google tiles link
+   * to thousands of third-party merchants, which are outside those
+   * permissions, so offering to "look them up" would only ever fail.
+   */
+  function isLookupHost(href) {
+    try {
+      var site = sites.forLocation(new URL(href));
+      return site.id !== 'generic' && site.id !== 'google';
+    } catch (error) {
+      return false;
     }
-    return false;
   }
 
-  async function findPackageSizes() {
-    if (state.detailLookupBusy) return;
-    var queue = [];
-    for (var i = 0; i < state.cards.length && queue.length < MAX_DETAIL_LOOKUPS; i++) {
-      var card = state.cards[i];
-      var data = analyzeCard(card);
-      if (data.productUrl && !detailAttempts.has(card)) queue.push({ card: card, url: data.productUrl });
+  /**
+   * Distinct product URLs, in page order, for cards that could not be priced
+   * per unit and have not been looked up yet.
+   */
+  function lookupCandidates(cards, analyses, cardVerdicts) {
+    var out = [];
+    var seen = new Set();
+    for (var i = 0; i < cards.length; i++) {
+      if (cardVerdicts[i].state !== 'unknown') continue;
+      // The store itself prices this per count or per load ("$0.20/load"):
+      // it is sold by count, and its product page says the same. Measured on
+      // a live Amazon search, every such lookup came back with nothing.
+      if (cardVerdicts[i].source === 'site') continue;
+      var url = analyses[i].productUrl;
+      if (!url || !isLookupHost(url)) continue;
+      var key = lookupKey(url);
+      if (seen.has(key) || lookups.has(key) || pendingLookups.has(key)) continue;
+      seen.add(key);
+      out.push({ key: key, url: url, needsPrice: !analyses[i].price });
     }
+    return out;
+  }
+
+  /** Signs that the store answered with a bot check instead of the product. */
+  var BLOCK_PAGE_RE = /Robot or human\?|px-captcha|validateCaptcha|Enter the characters you see below|api-services-support@amazon\.com/i;
+  var BLOCK_REASONS = { 'http-429': true, 'http-503': true, blocked: true };
+
+  function remember(key, value) {
+    if (lookups.size >= LOOKUP_CACHE_LIMIT) lookups.delete(lookups.keys().next().value);
+    lookups.set(key, value);
+  }
+
+  /** The best size a product page states: its title, or a declared size. */
+  function quantityFromPage(page) {
+    var fromTitle = page.title ? quantity.parseQuantity(page.title) : null;
+    if (fromTitle && fromTitle.confidence >= 0.6) return fromTitle;
+    for (var i = 0; i < page.sizes.length; i++) {
+      if (!quantity.parseQuantity(page.sizes[i])) continue;
+      // Read beside the title so a pack count there still counts: a listing
+      // titled "(2 pack) ... 15 Servings" declaring "404 g" is flagged as an
+      // ambiguous multipack instead of being priced as one pouch.
+      var declared = quantity.parseQuantity(page.title + ' | ' + page.sizes[i]) ||
+        quantity.parseQuantity(page.sizes[i]);
+      // A declared size may be a shipping weight; never fully trusted.
+      declared.confidence = Math.min(declared.confidence, 0.75);
+      return declared;
+    }
+    return fromTitle;
+  }
+
+  function parseHtml(html) {
+    return new DOMParser().parseFromString(html, 'text/html');
+  }
+
+  /**
+   * Fetch one product page and remember what it says.
+   * @returns {Promise<'found'|'empty'|'blocked'>}
+   */
+  async function lookUpProduct(candidate) {
+    var response = await requestProductPage(candidate.url);
+    if (BLOCK_REASONS[response.reason]) return 'blocked';
+    if (!response.html) {
+      remember(candidate.key, null);
+      return 'empty';
+    }
+
+    var page = productData.readProductHtml(response.html, parseHtml);
+    var parsed = quantityFromPage(page);
+    if (!parsed && !page.price && !page.unitPrice) {
+      if (BLOCK_PAGE_RE.test(response.html.slice(0, 200000))) return 'blocked';
+      remember(candidate.key, null);
+      return 'empty';
+    }
+    if (parsed) parsed.flags = parsed.flags.concat(['product-detail']);
+    if (page.price) page.price.raw += ' (product page)';
+    var unitPrice = isComparableUnitPrice(page.unitPrice) ? page.unitPrice : null;
+    if (unitPrice) unitPrice.raw += ' (product page)';
+    remember(candidate.key, { quantity: parsed, price: page.price, unitPrice: unitPrice });
+    // Only what can change the card's verdict counts as found: a page that
+    // merely repeats the price the card already shows has added nothing.
+    return parsed || unitPrice || (candidate.needsPrice && page.price) ? 'found' : 'empty';
+  }
+
+  /**
+   * Read the product pages of cards that could not be priced per unit.
+   *
+   * Pages are fetched by the service worker, without cookies, only on stores
+   * the extension already has permission for, three at a time. If the store
+   * starts answering with bot checks or "slow down" errors, the rest of the
+   * queue is dropped and no more lookups are made on this page: hammering on
+   * would only make the store treat the shopper's own browsing as a bot.
+   *
+   * @param {{auto?: boolean}} [options]
+   */
+  async function lookUpMissing(options) {
+    var auto = !!(options && options.auto);
+    var lookup = state.lookup;
+    if (lookup.busy || lookup.blocked || Date.now() < lookupsPausedUntil) return;
+
+    var limit = auto ? Math.min(MAX_LOOKUPS_PER_CLICK, MAX_AUTO_LOOKUPS_PER_PAGE - lookup.autoUsed) : MAX_LOOKUPS_PER_CLICK;
+    var queue = state.lookupQueue.slice(0, Math.max(0, limit));
     if (!queue.length) return;
+    if (auto) lookup.autoUsed += queue.length;
 
-    var result = { tried: queue.length, found: 0 };
+    lookup.busy = true;
+    lookup.finished = false;
+    lookup.done = 0;
+    lookup.found = 0;
+    lookup.total = queue.length;
+    queue.forEach(function (candidate) { pendingLookups.add(candidate.key); });
+
     async function worker() {
-      while (queue.length) {
+      // Stops as soon as the shopper moves to another results page, so a run
+      // for the page left behind never overlaps the next page's own.
+      while (queue.length && !lookup.blocked && state.lookup === lookup) {
+        var candidate = queue.shift();
+        var outcome;
         try {
-          if (await lookUpPackageSize(queue.shift())) result.found++;
+          outcome = await lookUpProduct(candidate);
         } catch (error) {
           // One malformed page must not abandon the rest of the queue.
+          remember(candidate.key, null);
+          outcome = 'empty';
         }
+        pendingLookups.delete(candidate.key);
+        if (outcome === 'blocked') {
+          lookup.blocked = true;
+          lookupsPausedUntil = Date.now() + LOOKUP_PAUSE_MS;
+          break;
+        }
+        lookup.done++;
+        if (outcome === 'found') {
+          lookup.found++;
+          analysisCache = new WeakMap();
+        }
+        if (state.lookup === lookup) classify();
       }
     }
 
-    state.detailLookupBusy = true;
-    state.lastLookup = null;
     // classify() rather than re-rendering the last stats, which predate the
     // busy flag and would leave the button enabled mid-lookup.
     classify();
     try {
       var workers = [];
-      for (var w = 0; w < DETAIL_LOOKUP_CONCURRENCY; w++) workers.push(worker());
+      for (var w = 0; w < LOOKUP_CONCURRENCY; w++) workers.push(worker());
       await Promise.all(workers);
     } finally {
       // A throw anywhere above would otherwise leave the flag set, and the
-      // panel would stay on "Looking for package sizes..." with the button
+      // panel would stay on "Checking product pages..." with the button
       // disabled for the rest of the page's life.
-      state.detailLookupBusy = false;
-      // Without a result the button simply vanished or came back, and a
-      // lookup that found nothing was indistinguishable from one that failed.
-      state.lastLookup = result;
-      classify();
+      lookup.busy = false;
+      lookup.finished = true;
+      // Anything left unfetched (a block cut the queue short) may be retried later.
+      queue.forEach(function (candidate) { pendingLookups.delete(candidate.key); });
+      // The page may have changed meanwhile; its fresh state is not ours.
+      if (state.lookup === lookup) classify();
     }
+  }
+
+  /** With automatic lookups on, start one whenever there is something to read. */
+  function maybeAutoLookup() {
+    var lookup = state.lookup;
+    if (!state.settings || !state.settings.autoLookup || lookup.busy || lookup.blocked) return;
+    if (Date.now() < lookupsPausedUntil) return;
+    if (!state.lookupQueue.length || lookup.autoUsed >= MAX_AUTO_LOOKUPS_PER_PAGE || orphaned()) return;
+    // Deferred so it never runs inside the classify() that discovered it.
+    setTimeout(function () {
+      lookUpMissing({ auto: true });
+    }, 0);
   }
 
   function jumpToBest() {
@@ -943,7 +1111,7 @@
         scan();
       },
       onJumpToBest: jumpToBest,
-      onFindSizes: findPackageSizes,
+      onFindSizes: function () { lookUpMissing(); },
       onOpenOptions: openOptions
     });
     state.panel.mount();

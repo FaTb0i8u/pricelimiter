@@ -46,6 +46,36 @@ npm run lint      # ESLint (after a one-time `npm ci` for the dev tooling)
 
 All three run in CI on every push (`.github/workflows/test.yml`).
 
+### Free offers on Aisle
+
+On [discover.gotoaisle.com/offers](https://discover.gotoaisle.com/offers) the
+extension hides every offer that is not an outright free item, leaving only
+"FREE Olipop" or "Get 2 FREE" style offers. A bar bottom-right counts what is
+shown and hidden, and **Show all** / **Free only** switches the filter (the
+choice is remembered). The toolbar button shows or hides the bar, and the
+toolbar icon counts the hidden offers.
+
+| Offer wording | Kept? |
+| --- | --- |
+| `FREE Olipop`, `Get 2 FREE cans`, `Try For FREE`, `100% cash back`, `on us` | kept |
+| `BOGO`, `Buy 1 Get 1 FREE`, `B2G1`, `2 for 1`, `Free dip with purchase of chips` | hidden |
+| Anything with "buy": `Buy 2, Get $7`, `Get Rewarded For Buying C2O!`, `Buy More, Earn More` | hidden |
+| `$2 off`, `Save $1.50`, `$3 back`, `Try For $8` | hidden |
+| No offer stated: `Redeem To Unlock More Offers!`, `Loyalty Pass`, `A Good Deal` | hidden |
+
+The wording rules live in `src/common/offer-classifier.js` (tested in
+`test/offer-classifier.test.js`, including tags copied from the live page);
+`src/content/aisle-offers.js` finds the cards. Neither depends on Aisle's class
+names: a card is the box around the offer wording that repeats alongside
+similar boxes, and every box in that row is judged, including ones whose tag
+promises nothing. A card is judged by its headline, so fine print such as "up
+to \$2.99 back" does not turn a free offer into a discount, while a BOGO or
+"buy" phrase anywhere on a card always hides it. The one "buy" exception is the
+bought item itself coming back free ("Buy 1, get it FREE"). "Free" in a product
+name ("Chlorine Free Diapers", "gluten free") is not an offer: it only counts
+opening the tag, after punctuation, or after a word such as "get", "try",
+"for" or a count.
+
 ### Price history
 
 With **Remember the lowest price I've seen** on (the default), each comparable
@@ -82,19 +112,55 @@ inside `display: contents` wrappers, which `order` cannot affect, so the sort
 looks through those to the real flex items. Layouts that are neither flex nor
 grid cannot be reordered this way, and the panel says so.
 
-### Package-size lookup
+### Looking up missing prices and sizes
 
-When a result does not list a package size, the panel can offer **Find package
-sizes**. This is an explicit, bounded lookup (at most eight cards per click),
-not background crawling. It requests only a linked product page that is already
-within the extension's existing site permissions, sends no retailer cookies,
-and accepts only explicit structured product metadata such as Schema.org
-`weight` or `net weight`. It therefore helps most on Amazon and Walmart; Google
-Shopping links to third-party merchants that are intentionally outside the
-extension's permissions are left untouched.
+When a result shows no price or no size, the panel offers **Look up price and
+size for N results**. It reads those products' own pages and fills in only what
+the card lacks: the price, the store's unit price, or the package size. Tick
+**Look up automatically** (in the panel or on the options page) to have it
+happen on every results page without clicking.
 
-After a lookup the panel reports how many of the pages it read declared a size,
-so "found nothing" is distinguishable from "did nothing".
+What is read from each store, measured on live pages:
+
+| Store | Source on the product page | Notes |
+| --- | --- | --- |
+| Walmart | The page's own JSON state: `product.priceInfo` (price, "10.5 ¢/oz") and `idml.specifications` ("Net content statement: 40 oz") | Its only Schema.org block describes the web page, so the old structured-data lookup found nothing here |
+| Amazon | `#productTitle`, and the core price block's `.priceToPay` and `.pricePerUnit` | No Schema.org data at all. "Item Weight" is deliberately ignored: it is the shipping weight, and a tub titled "5 LB" listed "3 pounds" |
+| Others | Schema.org `weight`, size properties and `Product` offers | Only stores the extension already has permission for |
+
+The lookup is deliberately conservative:
+
+- **No cookies, no new permissions.** Pages are fetched by the service worker
+  with `credentials: 'omit'`, only on Amazon and Walmart hosts already in the
+  manifest, and a redirect to any other origin is refused. Walmart prices can
+  vary by store, and a cookie-less request sees the default store's, which is
+  why the card's own price always wins when it has one.
+- **Bounded.** Three requests at a time, at most 24 per click and 48
+  automatic lookups per results page. Each product is looked up once per tab,
+  however often the store re-renders its card.
+- **Backs off.** If a store answers with "slow down" errors or a bot check, the
+  remaining lookups are dropped and the panel says the store stopped answering.
+  Carrying on would only make the store treat the shopper's own browsing as a
+  bot.
+- **Only where it can help.** Cards the store itself prices per count or per
+  load ("$0.20/load") are skipped: they are sold by count, and their product
+  pages say so too.
+- **Sponsored results are unwrapped first.** Walmart's `/sp/track?rd=` and
+  Amazon's `/sspa/click?url=` links are followed to the product they wrap, so a
+  lookup never fetches (and registers a click on) an ad tracker. The same
+  unwrapping lets the size in the product's link be read with no request at
+  all, as in "…-Gusset-19-0-oz-20-Servings".
+- **Honest about multipacks.** A declared size is read beside the page title,
+  so "(2 pack) … 404 g" is flagged as an ambiguous multipack rather than
+  priced as one pouch.
+
+Measured on live searches: on Walmart "protein powder" a lookup took the
+unpriced cards from 11 to 5, all of which genuinely state no size anywhere; on
+Walmart "coffee", automatic lookup took them from 7 to 1 within five seconds,
+and that one was a promotional banner ("…under $3"), which is no longer
+mistaken for a result. Google Shopping links to thousands of third-party merchants,
+which the extension has no permission to read, so Google results are not
+looked up.
 
 Price limits are saved separately for each detected currency. A limit set on a
 US storefront is not silently reused for Canadian dollars, pounds, or Australian
@@ -483,15 +549,22 @@ anywhere the content script runs.
 | `*://*.google.com/*` | Content script runs on Google search/shopping only |
 | `*://*.amazon.com/*` (+ `.co.uk`, `.ca`, `.com.au`) | Amazon search results |
 | `*://*.walmart.com/*` (+ `.ca`) | Walmart search, browse, shop and category pages (walmart.ca under its `/en/` and `/fr/` paths) |
+| `*://discover.gotoaisle.com/*` | Content script that filters the Aisle offers page to free offers; it makes no network requests |
 
 Every host is declared explicitly. There is no `<all_urls>`, no `tabs` and no
-analytics. The only network request is the optional, click-triggered package
-size lookup, which fetches product pages on these same hosts without cookies.
+analytics. The only network requests are the product-page lookups described
+above, made when you click **Look up** or turn on automatic lookup, to these
+same hosts and without cookies.
 
 ---
 
 ## Known limitations
 
+- **The Aisle filter reads wording, not markup.** Only offers that say they
+  are free are shown, so a free offer phrased in a way the rules in
+  `src/common/offer-classifier.js` do not recognise is hidden. Add the phrase
+  to `test/offer-classifier.test.js` and the rules; **Show all** reveals
+  everything meanwhile.
 - **Three stores only.** Google, Amazon and Walmart. Adding another means a
   profile in `src/content/sites.js` and a match pattern in `manifest.json`;
   match patterns cannot wildcard a TLD, so each national domain is listed
@@ -502,9 +575,9 @@ size lookup, which fetches product pages on these same hosts without cookies.
   compare those — that is a different feature, on a different page.
 - **US customary volumes.** A UK fluid ounce is 28.41 ml, not 29.57 ml. Results
   on `google.co.uk` and `amazon.co.uk` will be ~4% off for `fl oz`.
-- **Size comes from the visible card unless you ask.** Product detail pages are
-  fetched only by **Find package sizes**, at most eight per click, and only on
-  hosts the extension already has permission for.
+- **Some products state no size anywhere.** A lookup cannot find what the
+  store never wrote down: some product pages give only a serving count
+  ("Size: 27"). Those stay `no size`.
 - **Many Google tiles state no total size at all.** Google frequently prints
   only "24 g per serving" or "$1.82/ct" and no net weight. Those are reported
   `no size` rather than guessed at, because multiplying a serving by an unstated

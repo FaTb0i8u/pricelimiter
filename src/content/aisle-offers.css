@@ -1,0 +1,9 @@
+/*
+ * Injected into discover.gotoaisle.com. Only a data attribute is styled, so
+ * nothing can leak into the site's own layout; the control bar lives in a
+ * shadow root and is not styled from here.
+ */
+
+[data-ppp-aisle-hidden='true'] {
+  display: none !important;
+}

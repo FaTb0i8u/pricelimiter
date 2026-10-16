@@ -29,6 +29,10 @@
     minConfidence: 0.4,
     /** Reorder the results grid by unit price, cheapest first. */
     sortByUnitPrice: false,
+    /** Read product pages for results the card alone cannot price, without
+     *  being asked. Off by default: it makes requests the shopper did not
+     *  click for. */
+    autoLookup: false,
     /** Remember the lowest unit price seen per product, on this device only. */
     rememberPrices: true,
     /** Whether the badge guide has been dismissed. */

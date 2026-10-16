@@ -63,3 +63,77 @@ test('hostile JSON-LD is bounded rather than trusted', () => {
     assert.deepStrictEqual(productData.sizesFromJsonLd(junk), []);
   }
 });
+
+/**
+ * Walmart product pages carry no Schema.org size; everything is in the
+ * Next.js state. The shape below is trimmed from a live page, including a
+ * sponsored product in `contentLayout`, which must never be read.
+ */
+function walmartState(overrides) {
+  const product = Object.assign({
+    name: 'Great Value Creamy Peanut Butter, 40 oz',
+    priceInfo: {
+      currentPrice: { price: 4.18, priceString: '$4.18', currencyUnit: 'USD' },
+      unitPrice: { price: 0.105, priceString: '10.5 \u00a2/oz', currencyUnit: 'USD' }
+    }
+  }, overrides && overrides.product);
+  return {
+    props: { pageProps: { initialData: { data: {
+      contentLayout: { modules: [{ configs: { ad: { products: [{
+        name: 'Sponsored Jar 99 oz',
+        priceInfo: { currentPrice: { price: 1.0, currencyUnit: 'USD' }, unitPrice: { priceString: '1.0 \u00a2/oz' } }
+      }] } } }] },
+      product,
+      idml: { specifications: (overrides && overrides.specs) || [
+        { name: 'Flavor', value: 'Creamy' },
+        { name: 'Size', value: '40 oz' },
+        { name: 'Shelf life', value: '360 days' },
+        { name: 'Net content statement', value: '40 oz' }
+      ] }
+    } } } }
+  };
+}
+
+test('Walmart product state yields its own price, unit price and size, not an ad\u2019s', () => {
+  const page = productData.fromWalmartNextData(walmartState());
+  assert.strictEqual(page.title, 'Great Value Creamy Peanut Butter, 40 oz');
+  assert.strictEqual(page.price.amount, 4.18);
+  assert.strictEqual(page.price.currency, 'USD');
+  assert.strictEqual(page.unitPrice.amount, 0.105);
+  assert.strictEqual(page.unitPrice.perUnit.key, 'oz');
+  // The explicit net-content statement comes first; shelf life never.
+  assert.deepStrictEqual(page.sizes, ['40 oz', '40 oz']);
+});
+
+test('a Walmart product that names no size in its title still yields one from specs', () => {
+  const page = productData.fromWalmartNextData(walmartState({
+    product: { name: 'Nutricost Beef Bone Broth Protein Powder Unflavored (20 Servings)' },
+    specs: [{ name: 'Net Content Statement', value: '15.5 oz' }]
+  }));
+  assert.strictEqual(quantity.parseQuantity(page.title), null);
+  assert.strictEqual(quantity.parseQuantity(page.sizes[0]).raw, '15.5 oz');
+});
+
+test('malformed Walmart state is ignored, not trusted', () => {
+  const empty = { title: '', price: null, unitPrice: null, sizes: [] };
+  for (const junk of [null, 0, 'x', {}, { props: { pageProps: { initialData: { data: [] } } } }]) {
+    assert.deepStrictEqual(productData.fromWalmartNextData(junk), empty);
+  }
+  const bad = productData.fromWalmartNextData(walmartState({
+    product: { name: 42, priceInfo: { currentPrice: { price: -5, currencyUnit: 'usd' }, unitPrice: { priceString: 7 } } },
+    specs: [{ name: 'Size', value: { evil: true } }, null, 'Size: 5 lb']
+  }));
+  assert.deepStrictEqual(bad, empty);
+});
+
+test('a Schema.org Product gives its name and offer price', () => {
+  const json = { '@graph': [{ '@type': 'WebPage' }, {
+    '@type': ['Product', 'Thing'], name: ' Coffee  2 lb ', offers: [{ price: '18.99', priceCurrency: 'USD' }]
+  }] };
+  const found = productData.productFromJsonLd(json);
+  assert.strictEqual(found.title, 'Coffee 2 lb');
+  assert.strictEqual(found.price.amount, 18.99);
+  assert.strictEqual(productData.productFromJsonLd({ '@type': 'Product', offers: { lowPrice: 5, priceCurrency: 'EUR' } }).price.currency, 'EUR');
+  assert.strictEqual(productData.productFromJsonLd({ '@type': 'Product', offers: { price: 'free' } }).price, null);
+  assert.strictEqual(productData.productFromJsonLd({ '@type': 'Article' }), null);
+});

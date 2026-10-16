@@ -81,6 +81,18 @@
     'i'
   );
 
+  /**
+   * A gram figure that is a nutrition claim, not a pack size: "25g of protein,
+   * 5.5g BCAAs". Cards print these in bullet copy, and a live Amazon tile
+   * reading "25g ... 5.5g ... 5 lb" was badged "size unclear" because the
+   * claims looked like competing sizes. "Protein powder", "protein isolate"
+   * and the like are product names, so a size before them still counts.
+   */
+  var NUTRIENT_AFTER_RE =
+    /^\s*(?:of\s+)?(?:(?:whey|plant[- ]based|complete|clean|grass[- ]fed)\s+)?(?:protein(?!\s+(?:powder|isolate|concentrate|blend|bars?|shakes?|drink|mix|cookies?|chips?|pancake))|net\s+carbs?|carbs?|carbohydrates?|sugars?|added\s+sugars?|fat|fib(?:er|re)|sodium|bcaas?|eaas?|creatine|collagen|caffeine)\b/i;
+  /** Above this a gram figure is too large to be a per-serving claim. */
+  var MAX_NUTRIENT_GRAMS = 100;
+
   /** A size immediately preceded by one of these is an authoritative total. */
   var NET_LABEL_RE = /\b(?:net\s*(?:wt|weight)|total\s*(?:wt|weight|net)|net\s*(?:vol|volume))\b[\s.:()-]*$/i;
 
@@ -165,6 +177,7 @@
       var value = parseNumberToken(m[1]);
       var unit = units.resolveUnit(m[2]);
       if (!isFinite(value) || value <= 0 || !unit) continue;
+      if ((unit.key === 'g' || unit.key === 'mg') && value <= MAX_NUTRIENT_GRAMS && NUTRIENT_AFTER_RE.test(after)) continue;
 
       var flags = [];
       if (/\d\s*-\s*$/.test(before)) flags.push('range');

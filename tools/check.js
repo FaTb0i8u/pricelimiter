@@ -68,6 +68,11 @@ for (const cs of manifest.content_scripts || []) {
     for (const name of missing) {
       problems.push(`order: ${file} uses PPP.${name}, which no earlier content script defines`);
     }
+    // tools/build-fixture.js inlines these files into one <script> element,
+    // which a literal closing tag anywhere in the source would end early.
+    if (/<\/script/i.test(source)) {
+      problems.push(`inline: ${file} contains a literal </script>; split it, as in '</' + 'script>'`);
+    }
     if (own) defined.add(own);
   }
 }

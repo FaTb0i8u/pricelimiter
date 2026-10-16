@@ -44,6 +44,14 @@
   var NON_PRICE_CONTEXT_RE =
     /(delivery|shipping|\/\s*mo\b|per month|monthly|was\s|save\s|\d+%\s*off|used\s|refurb|cashback|coupon|rrp|list price|orig(inal)?\s*price)/i;
 
+  /**
+   * A price ceiling in promotional copy - "Find yummy fall faves under $3" -
+   * names no product's price. Walmart drops banners like that into the grid,
+   * and reading one as a card added an unpriceable "result" to every page.
+   */
+  var PRICE_CEILING_RE = new RegExp(
+    '\\b(?:under|below|less than|up to)\\s*[' + price.SYMBOL_CHARS + ']\\s?\\d', 'i');
+
   /** The profile for the current page. */
   function currentSite() {
     return sites.forLocation(typeof location !== 'undefined' ? location : null);
@@ -95,6 +103,7 @@
         var value = node.nodeValue;
         if (!value || value.length > MAX_PRICE_TEXT_LENGTH) return NodeFilter.FILTER_REJECT;
         if (!price.looksLikePrice(value)) return NodeFilter.FILTER_REJECT;
+        if (PRICE_CEILING_RE.test(value)) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       }
     });
@@ -609,15 +618,87 @@
     return readable.join(' | ').replace(URL_NUTRIENT_RE, ' ').replace(/\s+/g, ' ').trim();
   }
 
-  /** Merchant URLs reachable from a card, unwrapping Google's ad redirects. */
+  /**
+   * Store ad trackers that wrap the real product link, and the parameter
+   * holding it: Walmart's sponsored tiles go through
+   * "/sp/track?...&rd=https://www.walmart.com/ip/...", Amazon's through
+   * "/sspa/click?...&url=/Product-Name/dp/...". Read as-is, the tracker's own
+   * path ("sp | track") looked like a URL with nothing in it, and the product
+   * page behind it was never reached - 4 of the 5 unsized cards on a live
+   * Walmart search were sponsored tiles like this.
+   */
+  var TRACKER_PATH_RE = /^\/(?:sp\/track|sspa\/click)(?:\/|$)/i;
+  /** Walmart "/ip/<slug>/<id>" and Amazon "/<slug>/dp/<ASIN>" product pages. */
+  var STORE_PRODUCT_PATH_RE = /^\/(?:ip\/|[^/]+\/dp\/|dp\/|gp\/product\/|gp\/aw\/d\/)/i;
+
+  /**
+   * The URL a redirect wrapper points at, resolved against the wrapper's own
+   * origin (Amazon's is relative). The input itself when it is not a
+   * wrapper; null when it is one but carries no usable http(s) target.
+   * @param {URL} parsed
+   * @returns {URL|null}
+   */
+  function unwrapRedirect(parsed) {
+    var params;
+    var google = GOOGLE_HOST_RE.test(parsed.hostname);
+    if (google) params = ['adurl', 'url', 'q'];
+    else if (TRACKER_PATH_RE.test(parsed.pathname)) params = ['rd', 'url'];
+    else return parsed;
+
+    for (var i = 0; i < params.length; i++) {
+      var inner = parsed.searchParams.get(params[i]);
+      if (!inner) continue;
+      try {
+        // Only a store tracker's target may be relative (Amazon's is). On
+        // Google, `q` is usually the search text: resolved against google.com,
+        // "whey protein" became a plausible-looking product URL and hid the
+        // real merchant link that came after it.
+        var target = google ? new URL(inner) : new URL(inner, parsed.origin);
+        if (target.protocol !== 'http:' && target.protocol !== 'https:') continue;
+        if (google && GOOGLE_HOST_RE.test(target.hostname)) continue;
+        return target;
+      } catch (e) {
+        /* not a URL; try the next parameter */
+      }
+    }
+    return null;
+  }
+
+  /** Merchant URLs reachable from a card, unwrapping ad redirects. */
   function extractUrlSizeText(card) {
     var links = card.querySelectorAll('a[href]');
     for (var i = 0; i < links.length; i++) {
       var href = links[i].getAttribute('href') || '';
-      var text = sizeTextFromUrl(href);
+      var text;
+
+      var resolved = null;
+      try {
+        resolved = new URL(href, location.href);
+      } catch (e) {
+        /* unparseable; the raw-string checks below still apply */
+      }
+      // A wrapper is never read as if it were the product, even when it turns
+      // out to point nowhere usable.
+      var unwrapped = resolved ? unwrapRedirect(resolved) : null;
+      if (resolved && unwrapped !== resolved) {
+        text = unwrapped ? sizeTextFromUrl(unwrapped.href) : '';
+        if (text) return text;
+        continue;
+      }
+
+      // A store's own relative product link names the product:
+      // "/ip/PEScience-Select-Protein-...-Vanilla-1-85-lb/123". Other relative
+      // links (Google's "/shopping/...", "/search?q=") do not, so only these
+      // product paths are read.
+      if (resolved && !/^[a-z][a-z0-9+.-]*:|^\/\//i.test(href) && STORE_PRODUCT_PATH_RE.test(resolved.pathname)) {
+        text = sizeTextFromUrl(resolved.href);
+        if (text) return text;
+      }
+
+      text = sizeTextFromUrl(href);
       if (text) return text;
 
-      var wrapped = href.match(/[?&](?:adurl|url|q)=([^&]+)/);
+      var wrapped = href.match(/[?&](?:adurl|url|q|rd)=([^&]+)/);
       if (!wrapped) continue;
       var inner;
       try {
@@ -649,19 +730,12 @@
       }
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue;
 
-      // Google cards often wrap a merchant URL in `adurl`, `url`, or `q`.
-      // Unwrap it so the background can make a permission-scoped request to
-      // the actual supported retailer, rather than fetching a redirect page.
-      if (GOOGLE_HOST_RE.test(parsed.hostname)) {
-        var wrapped = parsed.searchParams.get('adurl') ||
-          parsed.searchParams.get('url') || parsed.searchParams.get('q');
-        if (!wrapped) continue;
-        try {
-          parsed = new URL(wrapped);
-        } catch (e) {
-          continue;
-        }
-      }
+      // Google wraps merchant URLs in `adurl`, `url` or `q`, and Walmart and
+      // Amazon wrap sponsored results in click trackers. Unwrap them so the
+      // background makes a permission-scoped request for the product page
+      // itself, rather than fetching a redirect (or registering an ad click).
+      parsed = unwrapRedirect(parsed);
+      if (!parsed) continue;
       return parsed.href;
     }
     return '';
@@ -685,6 +759,7 @@
     extractUrlSizeText: extractUrlSizeText,
     extractProductUrl: extractProductUrl,
     sizeTextFromUrl: sizeTextFromUrl,
+    unwrapRedirect: unwrapRedirect,
     isProductImage: isProductImage,
     cleanText: cleanText,
     titleFromAriaLabel: titleFromAriaLabel,

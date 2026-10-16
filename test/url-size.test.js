@@ -109,3 +109,77 @@ test('a number cannot pair with a unit from the next path segment', () => {
   // "/5/lb-powder" is two unrelated segments, not "5 lb".
   assert.equal(sizeFrom('https://example.com/5/lb-powder'), null);
 });
+
+test('store ad trackers are unwrapped to the product they point at', () => {
+  // Regression: Walmart's sponsored tiles link through /sp/track, so their
+  // size-bearing product path was never read, and a lookup would have
+  // fetched the tracker (registering an ad click) instead of the product.
+  const walmart = new URL('https://www.walmart.com/sp/track?bt=1&pos=3&rd=' +
+    encodeURIComponent('https://www.walmart.com/ip/Clean-Simple-Eats-Protein-Gusset-19-0-oz-20-Servings/18826269861?adsRedirect=true'));
+  const inner = adapter.unwrapRedirect(walmart);
+  assert.strictEqual(inner.pathname, '/ip/Clean-Simple-Eats-Protein-Gusset-19-0-oz-20-Servings/18826269861');
+  assert.match(adapter.sizeTextFromUrl(inner.href), /19\.0 oz/);
+
+  // Amazon's target is relative to the tracker.
+  const amazon = adapter.unwrapRedirect(new URL('https://www.amazon.com/sspa/click?ie=UTF8&url=%2FWhey-Protein-5-lb%2Fdp%2FB000QSNYGI%2Fref%3Dsr_1_1_sspa'));
+  assert.strictEqual(amazon.href, 'https://www.amazon.com/Whey-Protein-5-lb/dp/B000QSNYGI/ref=sr_1_1_sspa');
+
+  const google = adapter.unwrapRedirect(new URL('https://www.google.com/aclk?adurl=https%3A%2F%2Fwww.walmart.com%2Fip%2F1'));
+  assert.strictEqual(google.href, 'https://www.walmart.com/ip/1');
+});
+
+test('unwrapping never yields a non-http target, and leaves ordinary links alone', () => {
+  const plain = new URL('https://www.walmart.com/ip/Thing/123?url=https://evil.example/');
+  assert.strictEqual(adapter.unwrapRedirect(plain), plain, 'only known tracker paths are unwrapped');
+  assert.strictEqual(adapter.unwrapRedirect(new URL('https://www.walmart.com/sp/track?rd=javascript%3Aalert(1)')), null);
+  assert.strictEqual(adapter.unwrapRedirect(new URL('https://www.walmart.com/sp/track?bt=1')), null);
+  assert.strictEqual(adapter.unwrapRedirect(new URL('https://www.google.com/aclk?sa=l')), null);
+});
+
+/** Just enough of a card for extractUrlSizeText: its links' raw hrefs. */
+function fakeCard(...hrefs) {
+  return { querySelectorAll: () => hrefs.map((href) => ({ getAttribute: () => href })) };
+}
+
+function withLocation(href, fn) {
+  globalThis.location = new URL(href);
+  try {
+    return fn();
+  } finally {
+    delete globalThis.location;
+  }
+}
+
+test('a store\u2019s own relative product link is read for a size', () => {
+  // Regression: relative links were never read, so a Walmart tile linking to
+  // "/ip/...-Vanilla-1-85-lb/..." stayed unsized with the size in plain view.
+  withLocation('https://www.walmart.com/search?q=protein', () => {
+    assert.match(adapter.extractUrlSizeText(fakeCard('/ip/PEScience-Select-Protein-Gourmet-Vanilla-1-85-lb/119349946?classType=VARIANT')), /1\.85 lb/);
+    // Other relative links still say nothing about the product.
+    assert.strictEqual(adapter.extractUrlSizeText(fakeCard('/search?q=whey+5+lb', '/browse/protein-5-lb/123')), '');
+  });
+  withLocation('https://www.amazon.com/s?k=whey', () => {
+    assert.match(adapter.extractUrlSizeText(fakeCard('/Optimum-Nutrition-Standard-Protein-5-Pound/dp/B000QSNYGI/ref=sr_1_3')), /5 pound/i);
+  });
+});
+
+test('a sponsored tile\u2019s size is read through its tracker', () => {
+  withLocation('https://www.walmart.com/search?q=protein', () => {
+    const tracker = 'https://www.walmart.com/sp/track?bt=1&rd=' +
+      encodeURIComponent('https://www.walmart.com/ip/Clean-Simple-Eats-Gusset-19-0-oz-20-Servings/18826269861?adsRedirect=true');
+    assert.match(adapter.extractUrlSizeText(fakeCard(tracker)), /19\.0 oz/);
+    assert.strictEqual(adapter.extractUrlSizeText(fakeCard('https://www.walmart.com/sp/track?bt=1')), '');
+  });
+});
+
+test('a Google search query is never mistaken for a product link', () => {
+  // Regression: resolving `q=whey protein` against google.com produced
+  // "https://www.google.com/whey%20protein", which hid the merchant link.
+  assert.strictEqual(adapter.unwrapRedirect(new URL('https://www.google.com/search?ibp=oshop&q=whey+protein&prds=catalogid:1')), null);
+  assert.strictEqual(adapter.unwrapRedirect(new URL('https://www.google.com/url?q=%2Fshopping%2Fproduct%2F1')), null);
+  assert.strictEqual(adapter.unwrapRedirect(new URL('https://www.google.com/url?q=https%3A%2F%2Fwww.google.com%2Fsearch%3Fq%3Dx')), null);
+  assert.strictEqual(
+    adapter.unwrapRedirect(new URL('https://www.google.com/url?q=https%3A%2F%2Fwww.walmart.com%2Fip%2FThing%2F1')).href,
+    'https://www.walmart.com/ip/Thing/1'
+  );
+});

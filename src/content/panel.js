@@ -129,6 +129,10 @@
     '      <span data-role="detail-label"></span>',
     '    </button>',
     '    <p class="detail-result" data-role="detail-result" role="status" hidden></p>',
+    '    <label class="check detail-auto" data-role="detail-auto" hidden>',
+    '      <input id="ppp-auto-lookup" type="checkbox">',
+    '      <span>Look up automatically on Amazon and Walmart</span>',
+    '    </label>',
     '    <div class="footer">',
     '      <span class="links">',
     '        <button class="link" data-action="rescan" type="button">Rescan page</button>',
@@ -224,7 +228,8 @@
     '.detail:hover:not(:disabled) { background: #e8f0fe; } .detail:disabled { color: #80868b; cursor: wait; }',
     '.detail:focus-visible { outline: 2px solid #1a73e8; outline-offset: 1px; }',
     '.detail-result { margin: -6px 0 0; font-size: 12px; color: #5f6368; }',
-    '.best[hidden], .detail[hidden], .detail-result[hidden] { display: none; }',
+    '.detail-auto { margin-top: -6px; }',
+    '.best[hidden], .detail[hidden], .detail-result[hidden], .detail-auto[hidden] { display: none; }',
     '.footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }',
     '.links { display: flex; gap: 12px; }',
     '.link { padding: 0; font: inherit; font-size: 12px; color: #1a73e8; background: none;',
@@ -317,6 +322,8 @@
       detail: shadow.querySelector('[data-action="detail"]'),
       detailLabel: shadow.querySelector('[data-role="detail-label"]'),
       detailResult: shadow.querySelector('[data-role="detail-result"]'),
+      detailAuto: shadow.querySelector('[data-role="detail-auto"]'),
+      autoLookup: shadow.getElementById('ppp-auto-lookup'),
       collapse: shadow.querySelector('[data-action="collapse"]'),
       close: shadow.querySelector('[data-action="close"]'),
       help: shadow.querySelector('[data-action="help"]'),
@@ -397,6 +404,9 @@
     refs.hideUnsized.addEventListener('click', function () {
       emit({ hideUnknown: true }, true);
       refs.hideUnknown.focus();
+    });
+    refs.autoLookup.addEventListener('change', function () {
+      emit({ autoLookup: refs.autoLookup.checked }, true);
     });
     refs.sort.addEventListener('change', function () {
       emit({ sortByUnitPrice: refs.sort.checked }, true);
@@ -585,14 +595,22 @@
         refs.detail.hidden = false;
         refs.detail.disabled = !!lookup.busy;
         refs.detailLabel.textContent = lookup.busy
-          ? 'Looking for package sizes\u2026'
-          : 'Find package sizes for up to ' + lookup.count + (lookup.count === 1 ? ' result' : ' results');
+          ? 'Checking product pages\u2026 ' + lookup.done + ' of ' + lookup.total
+          : 'Look up price and size for ' + lookup.count + (lookup.count === 1 ? ' result' : ' results');
       } else {
         refs.detail.hidden = true;
       }
-      var result = lookup && !lookup.busy ? lookup.result : null;
-      refs.detailResult.hidden = !result;
-      refs.detailResult.textContent = result ? describeLookup(result) : '';
+      var resultText = '';
+      if (lookup && lookup.blocked) {
+        resultText = lookup.blocked + ' stopped answering lookups, so they were paused. Try again later.';
+      } else if (lookup && !lookup.busy && lookup.result) {
+        resultText = describeLookup(lookup.result);
+      }
+      refs.detailResult.hidden = !resultText;
+      refs.detailResult.textContent = resultText;
+      // Offered alongside the lookup itself, where its effect makes sense.
+      refs.detailAuto.hidden = !lookup;
+      refs.autoLookup.checked = !!settings.autoLookup;
 
       // With hiding on, visible results that could not be priced read as the
       // filter failing. Say why they are there and offer the fix in place.
@@ -607,9 +625,8 @@
 
     function describeLookup(result) {
       var pages = result.tried + (result.tried === 1 ? ' product page' : ' product pages');
-      if (!result.found) return 'No package sizes found on ' + pages + '.';
-      return 'Found ' + result.found + (result.found === 1 ? ' package size' : ' package sizes') +
-        ' on ' + pages + '.';
+      if (!result.found) return 'Nothing new found on ' + pages + '.';
+      return 'Filled in details from ' + result.found + ' of ' + pages + '.';
     }
 
     function mount() {

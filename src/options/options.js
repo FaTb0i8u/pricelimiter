@@ -18,7 +18,7 @@
   };
   /** Currencies of the storefronts the extension supports. */
   var ADDABLE_CURRENCIES = ['USD', 'CAD', 'GBP', 'AUD', 'EUR'];
-  var TOGGLES = ['filterEnabled', 'hideUnknown', 'hideOtherDimension', 'sortByUnitPrice', 'panelVisible', 'rememberPrices', 'debug'];
+  var TOGGLES = ['filterEnabled', 'hideUnknown', 'hideOtherDimension', 'sortByUnitPrice', 'autoLookup', 'panelVisible', 'rememberPrices', 'debug'];
 
   var current = null;
   var statusTimer = null;

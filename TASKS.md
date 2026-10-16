@@ -296,3 +296,59 @@ restored on blur instead of left blank; the guide formats the limit as money.
 ### 39. [done] `1,5 kg`, `.5 L` and `1 234,56 €`
 Decimal-comma sizes (amazon.ca in French), dropped leading zeros, and a decimal
 comma after a U+202F grouping space (read as 123456) all parse correctly.
+
+---
+
+# Product-page lookups (v0.4.0, follow-up)
+
+Prompted by "a lot of products still show no price or no weight". Measured
+first on live searches (Amazon 4, Walmart 3; Google serves automated
+browsers a CAPTCHA, so it could not be measured).
+
+### 40. [done] The size lookup could never succeed on Amazon or Walmart — *verified live*
+It read only Schema.org `weight`. Walmart product pages have one ld+json
+block, describing the WebPage; Amazon's have none. Both stores' pages are now
+read for what they do contain: Walmart's Next.js state (`product.priceInfo`,
+`idml.specifications`, read without building a DOM) and Amazon's title and
+core price block (`.priceToPay`, `.pricePerUnit`). Amazon's "Item Weight" is
+deliberately not read: it is the shipping weight, and a tub titled "5 LB"
+listed "3 pounds". The readers live in `src/common/product-data.js`.
+
+### 41. [done] The page was cut off before the data — *verified live*
+The 300 KB cap ended every page before the parts read: Walmart's JSON runs from
+~1 MB to the end of a 1.5–2 MB page; Amazon's title and price sit 520–720 KB
+into a ~3 MB page. Now 3 MB (1.2 MB on Amazon), still streamed and stopped at
+the cap.
+
+### 42. [done] Lookups now fill price and unit price too, not just size
+"No price" cards get the product page's price; cards with no comparable unit
+price get the store's own. Results are keyed by product URL (ASIN on Amazon), so
+a re-rendered card reuses them, and only gaps on the card are filled.
+
+### 43. [done] Sponsored results linked to ad trackers — *verified live*
+4 of 5 unsized cards on a live Walmart search linked through `/sp/track?rd=`;
+Amazon uses `/sspa/click?url=`. They are now unwrapped, so a lookup fetches the
+product rather than registering an ad click, and a size in the wrapped link
+("…-19-0-oz-…") is read with no request at all. A wrapper is never itself read
+as a product link. Store-relative product links (`/ip/…`, `/dp/…`) are now read
+for sizes too.
+
+### 44. [done] Automatic lookup, progress and back-off
+Opt-in "Look up automatically" (panel and options page). Progress shows as
+"Checking product pages… 4 of 7"; the result counts only pages that changed a
+verdict. HTTP 429/503, a redirect to a bot-check path, or a bot-check page stops
+the queue and the panel says the store stopped answering. Cards the store
+prices per count or per load are not looked up: their pages say the same.
+
+### 45. [done] Card-copy nutrition claims read as sizes — *verified live*
+"25g of Protein, 5.5g BCAAs, 5 lb" was "size unclear" on Amazon. Gram figures up
+to 100 g followed by a nutrient are now ignored; "500g Protein Powder" is not.
+
+### 46. [done] Promotional price ceilings detected as results — *verified live*
+Walmart's "Find yummy fall faves under $3" banner was badged as an unpriceable
+result. "Under/below/less than/up to $X" is no longer read as a price.
+
+### 47. [done] A literal `</script>` broke the fixture harness
+`tools/build-fixture.js` inlines the sources into one script element; the new
+reader's `'</script>'` ended it early. Now split as `'</' + 'script>'`, and
+`npm run check` now rejects the literal in content scripts.
