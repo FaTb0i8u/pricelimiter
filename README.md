@@ -30,6 +30,21 @@ on that tab. Every setting, including per-currency limits, is also on the
 options page (right-click the toolbar button → **Options**, or **Settings** in
 the panel).
 
+### Choosing which sites it runs on
+
+The **Sites** section at the top of the options page has a switch for each
+site: **Google Shopping**, **Amazon**, **Walmart** and **Aisle**. All start on.
+Switch one off and the extension leaves that site exactly as the store serves
+it — no badges, no panel, no hidden results, no product-page lookups, no
+toolbar count. For example, with Google Shopping and Amazon off and Aisle on,
+only the Aisle offers page is filtered.
+
+Changes apply straight away, including to tabs already open. The switches are
+saved with the rest of the settings (`sites` in `chrome.storage.sync`), and
+**Reset to defaults** turns every site back on. The toolbar button never
+overrides a switch: clicked on a site that is switched off, it opens the
+options page with a note saying so and the focus on that site's switch.
+
 > Publishing to the Chrome Web Store requires a **one-time \$5 developer
 > registration fee**. Loading unpacked, as above, is free forever.
 
@@ -222,7 +237,7 @@ price text node  ──▶  walk up to the card  ──▶  merchant unit price?
 | `src/common/units.js` | Unit tables, exact conversion factors, filter bases |
 | `src/common/parse-quantity.js` | Net weight / volume extraction from titles |
 | `src/common/parse-price.js` | Currency parsing incl. non-US decimal conventions |
-| `src/common/settings.js` | `chrome.storage.sync` persistence + input sanitising |
+| `src/common/settings.js` | `chrome.storage.sync` persistence + input sanitising, including the per-site switches |
 | `src/common/verdict.js` | Pass/fail/n.a. rules, sort order, locale-aware money formatting |
 | `src/common/history.js` | Lowest-price-seen history in `chrome.storage.local` |
 | `src/common/product-data.js` | Sizes from a product page's Schema.org data, for the size lookup |
@@ -537,7 +552,8 @@ store the 15 badges survive, and on an unknown host the extension removes every
 badge and hides the panel.
 
 The toolbar button remains the manual override, and still forces the panel on
-anywhere the content script runs.
+anywhere the content script runs — except on a site switched off on the
+options page, which never activates by URL, by content or from the toolbar.
 
 ---
 
@@ -566,9 +582,10 @@ same hosts and without cookies.
   to `test/offer-classifier.test.js` and the rules; **Show all** reveals
   everything meanwhile.
 - **Three stores only.** Google, Amazon and Walmart. Adding another means a
-  profile in `src/content/sites.js` and a match pattern in `manifest.json`;
-  match patterns cannot wildcard a TLD, so each national domain is listed
-  individually.
+  profile in `src/content/sites.js`, a match pattern in `manifest.json`, and a
+  switch in `SITES` in `src/common/settings.js` plus `src/options/options.html`
+  (`test/sites.test.js` fails until all of them exist); match patterns cannot
+  wildcard a TLD, so each national domain is listed individually.
 - **It compares search results, not competing offers for one product.** The
   extension ranks the items *on the page* by unit price. It does not open
   Amazon's "Other Sellers on Amazon" box or Walmart's marketplace offers and

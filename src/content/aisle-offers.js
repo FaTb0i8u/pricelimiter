@@ -17,7 +17,10 @@
 
   var PPP = root.PPP;
   var offers = PPP.offers;
+  var settingsApi = PPP.settings;
 
+  /** This page's id among the per-site switches on the options page. */
+  var SITE_ID = 'aisle';
   var STORAGE_KEY = 'ppp.aisle.v1';
   var DEFAULTS = { freeOnly: true, barVisible: true };
   var CARD_ATTR = 'data-ppp-aisle-card';
@@ -36,6 +39,8 @@
 
   var state = {
     prefs: { freeOnly: DEFAULTS.freeOnly, barVisible: DEFAULTS.barVisible },
+    /** False while the user has switched the extension off for Aisle. */
+    enabled: true,
     cards: [],
     kinds: new WeakMap(),
     timer: 0,
@@ -258,7 +263,7 @@
   function scan() {
     state.timer = 0;
     state.href = location.href;
-    if (!isOffersPage(location) || !document.body) {
+    if (!state.enabled || !isOffersPage(location) || !document.body) {
       clearAll();
       renderBar(null);
       setBadge('');
@@ -375,8 +380,9 @@
 
   /* ---------- wiring ---------- */
 
-  function init(prefs) {
+  function init(prefs, settings) {
     state.prefs = prefs;
+    state.enabled = settingsApi.siteEnabled(settings, SITE_ID);
     var observer = new MutationObserver(function () {
       // The site is a single-page app: a route change shows up as DOM churn.
       if (location.href !== state.href) clearAll();
@@ -392,12 +398,25 @@
         scan();
       });
     }
+    // Switched on or off from the options page, in this tab or another.
+    settingsApi.subscribe(function (next) {
+      var enabled = settingsApi.siteEnabled(next, SITE_ID);
+      if (enabled === state.enabled) return;
+      state.enabled = enabled;
+      scan();
+    });
     scan();
   }
 
   if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
-    chrome.runtime.onMessage.addListener(function (message) {
+    chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       if (!message || message.type !== 'ppp:toggle-panel') return;
+      // Switched off here: the service worker points the user at the switch.
+      if (!state.enabled) {
+        sendResponse({ disabledSite: SITE_ID });
+        return;
+      }
+      sendResponse({ ok: true });
       state.prefs.barVisible = !(state.prefs.barVisible && isOffersPage(location));
       savePrefs();
       scan();
@@ -411,5 +430,7 @@
     scan: scan
   };
 
-  loadPrefs().then(init);
+  Promise.all([loadPrefs(), settingsApi.load()]).then(function (loaded) {
+    init(loaded[0], loaded[1]);
+  });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

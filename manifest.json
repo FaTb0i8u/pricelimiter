@@ -85,7 +85,12 @@
     },
     {
       "matches": ["*://discover.gotoaisle.com/*"],
-      "js": ["src/common/offer-classifier.js", "src/content/aisle-offers.js"],
+      "js": [
+        "src/common/units.js",
+        "src/common/settings.js",
+        "src/common/offer-classifier.js",
+        "src/content/aisle-offers.js"
+      ],
       "css": ["src/content/aisle-offers.css"],
       "run_at": "document_idle"
     }

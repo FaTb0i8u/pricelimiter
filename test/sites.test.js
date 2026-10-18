@@ -155,3 +155,28 @@ test('the manifest injects on every page the profiles call a results page', () =
     assert.ok(patterns.some((re) => re.test(href)), `manifest: ${href}`);
   }
 });
+
+test('every site the extension runs on has an on/off switch, and the options page shows it', () => {
+  // Regression guard: a store added to sites.js without a switch could never
+  // be turned off, and a switch missing from the page could never be flipped.
+  const settings = require('../src/common/settings.js');
+  const switches = settings.SITES.map((s) => s.id);
+  for (const site of sites.SITES) assert.ok(switches.includes(site.id), `switch for ${site.id}`);
+  assert.ok(switches.includes('aisle'), 'switch for the Aisle offers page');
+
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const page = fs.readFileSync(path.join(__dirname, '..', 'src', 'options', 'options.html'), 'utf8');
+  for (const id of switches) {
+    assert.match(page, new RegExp(`<input type="checkbox" id="site-${id}">`), `options checkbox for ${id}`);
+  }
+});
+
+test('the Aisle content script can read the site switches', () => {
+  const manifest = require('../manifest.json');
+  const aisle = manifest.content_scripts.find((cs) => cs.js.includes('src/content/aisle-offers.js'));
+  const order = aisle.js;
+  assert.ok(order.indexOf('src/common/settings.js') > -1, 'settings.js is injected');
+  assert.ok(order.indexOf('src/common/units.js') < order.indexOf('src/common/settings.js'), 'units.js first');
+  assert.ok(order.indexOf('src/common/settings.js') < order.indexOf('src/content/aisle-offers.js'));
+});

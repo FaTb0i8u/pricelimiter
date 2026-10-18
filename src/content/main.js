@@ -566,7 +566,10 @@
     // the intermediate state and nothing flickers.
     unhideAll();
 
-    var cards = adapter.findCards();
+    // A store the user has switched off is left exactly as it was served, so
+    // the card search is skipped altogether.
+    var enabled = siteEnabled();
+    var cards = enabled ? adapter.findCards() : [];
 
     // Activation fallback for when the URL test says no but the page plainly
     // is a results grid. Stores change their results URLs without notice -
@@ -575,7 +578,7 @@
     // hosts we have a profile for, so an unknown site never auto-activates on
     // the strength of a few prices.
     var byUrl = state.forced || adapter.isShoppingSurface();
-    state.contentActive = !byUrl && adapter.currentSite().id !== 'generic' &&
+    state.contentActive = enabled && !byUrl && adapter.currentSite().id !== 'generic' &&
       cards.length >= MIN_CARDS_TO_AUTO_ACTIVATE;
 
     if (!isActive()) {
@@ -802,7 +805,12 @@
   }
 
   function isActive() {
-    return state.forced || adapter.isShoppingSurface() || state.contentActive;
+    return siteEnabled() && (state.forced || adapter.isShoppingSurface() || state.contentActive);
+  }
+
+  /** Whether the user has left the extension switched on for this store. */
+  function siteEnabled() {
+    return settingsApi.siteEnabled(state.settings, adapter.currentSite().id);
   }
 
   function applySettings(patch) {
@@ -1120,9 +1128,22 @@
       // Our own saves echo back through onChanged; skip them.
       if (JSON.stringify(next) === JSON.stringify(settingsApi.sanitize(state.settings))) return;
       var wasRemembering = state.settings.rememberPrices;
+      var wasEnabled = siteEnabled();
       state.settings = next;
-      if (next.rememberPrices !== wasRemembering) refreshHistory();
-      else classify();
+      var switched = siteEnabled() !== wasEnabled;
+      if (switched && wasEnabled) {
+        // Switched off for this store: drop the toolbar override and stop any
+        // product-page lookups still running for it.
+        state.forced = false;
+        state.lookup = freshLookupState();
+        state.lookupQueue = [];
+      }
+      var historyChanged = next.rememberPrices !== wasRemembering;
+      if (historyChanged) refreshHistory();
+      // Turning a store on or off changes which cards exist, not just how
+      // they are judged, so it needs a full scan.
+      if (switched) scan();
+      else if (!historyChanged) classify();
     });
 
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
@@ -1153,8 +1174,15 @@
   }
 
   if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
-    chrome.runtime.onMessage.addListener(function (message) {
+    chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       if (!message || message.type !== 'ppp:toggle-panel' || !state.settings) return;
+      // Switched off here: the service worker points the user at the switch
+      // rather than the click doing nothing, or quietly overriding it.
+      if (!siteEnabled()) {
+        sendResponse({ disabledSite: adapter.currentSite().id });
+        return;
+      }
+      sendResponse({ ok: true });
       // Judge by what the user can see: on a dormant page the saved preference
       // may say "visible" while nothing is shown.
       var showing = panelView().panelVisible;

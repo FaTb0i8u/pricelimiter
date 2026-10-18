@@ -15,14 +15,21 @@ chrome.runtime.onInstalled.addListener((details) => {
 });
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab || typeof tab.id !== 'number') return;
+  let reply;
   try {
-    await chrome.tabs.sendMessage(tab.id, { type: 'ppp:toggle-panel' });
+    reply = await chrome.tabs.sendMessage(tab.id, { type: 'ppp:toggle-panel' });
   } catch (error) {
     // No content script answered: an unsupported page, a chrome:// URL, or a
     // results page opened before the extension was installed or updated.
     // Clicking used to do nothing at all, which reads as broken; the options
     // page says where the extension works and suggests a reload.
     chrome.tabs.create({ url: chrome.runtime.getURL('src/options/options.html#unsupported') });
+    return;
+  }
+  // The user switched the extension off for this site. Show them the switch
+  // rather than overriding their choice or appearing to do nothing.
+  if (reply && typeof reply.disabledSite === 'string' && /^[a-z]+$/.test(reply.disabledSite)) {
+    chrome.tabs.create({ url: chrome.runtime.getURL('src/options/options.html#off-' + reply.disabledSite) });
   }
 });
 

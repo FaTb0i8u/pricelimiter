@@ -10,6 +10,25 @@
 
   var STORAGE_KEY = 'ppp.settings.v1';
 
+  /**
+   * Sites the extension can be switched off on, by the id each content script
+   * knows its page by (the profile ids in sites.js, plus Aisle's offers page).
+   */
+  var SITES = [
+    { id: 'google', label: 'Google Shopping' },
+    { id: 'amazon', label: 'Amazon' },
+    { id: 'walmart', label: 'Walmart' },
+    { id: 'aisle', label: 'Aisle' }
+  ];
+
+  function allSitesOn() {
+    var out = {};
+    SITES.forEach(function (site) {
+      out[site.id] = true;
+    });
+    return out;
+  }
+
   var DEFAULTS = {
     /** Master switch for hiding results. Badges are shown either way. */
     filterEnabled: false,
@@ -42,6 +61,8 @@
     panelCollapsed: false,
     /** One of PANEL_CORNERS. */
     panelCorner: 'bottom-right',
+    /** Site id -> whether the extension runs there. Every site starts on. */
+    sites: allSitesOn(),
     /** Outline detected cards for adapter debugging. */
     debug: false
   };
@@ -75,8 +96,11 @@
   function sanitize(raw) {
     var out = {};
     Object.keys(DEFAULTS).forEach(function (key) {
-      out[key] = key === 'thresholds' ? {} : DEFAULTS[key];
+      out[key] = DEFAULTS[key];
     });
+    // Fresh objects, so editing one copy can never change the defaults.
+    out.thresholds = {};
+    out.sites = allSitesOn();
     if (!raw || typeof raw !== 'object') return out;
 
     Object.keys(DEFAULTS).forEach(function (key) {
@@ -109,7 +133,37 @@
       // different currency without consent.
       out.thresholds.USD = out.threshold;
     }
+    if (raw.sites && typeof raw.sites === 'object') {
+      SITES.forEach(function (site) {
+        if (typeof raw.sites[site.id] === 'boolean') out.sites[site.id] = raw.sites[site.id];
+      });
+    }
     return out;
+  }
+
+  /**
+   * Whether the extension should run on the site with this id. A site with no
+   * switch (an unknown host) is never refused here.
+   */
+  function siteEnabled(settings, id) {
+    var sites = settings && settings.sites;
+    if (!sites || typeof sites !== 'object') return true;
+    return sites[id] !== false;
+  }
+
+  function setSiteEnabled(settings, id, enabled) {
+    var clean = sanitize(settings);
+    if (!Object.prototype.hasOwnProperty.call(clean.sites, id)) return clean;
+    clean.sites[id] = !!enabled;
+    return clean;
+  }
+
+  /** @returns {string} the switch's label for a site id, or '' when it has none. */
+  function siteLabel(id) {
+    for (var i = 0; i < SITES.length; i++) {
+      if (SITES[i].id === id) return SITES[i].label;
+    }
+    return '';
   }
 
   function isCurrencyCode(currency) {
@@ -242,8 +296,12 @@
     DEFAULTS: DEFAULTS,
     PANEL_CORNERS: PANEL_CORNERS,
     CONFIDENCE_PRESETS: CONFIDENCE_PRESETS,
+    SITES: SITES,
     STORAGE_KEY: STORAGE_KEY,
     sanitize: sanitize,
+    siteEnabled: siteEnabled,
+    setSiteEnabled: setSiteEnabled,
+    siteLabel: siteLabel,
     thresholdFor: thresholdFor,
     defaultThreshold: defaultThreshold,
     convertLimit: convertLimit,

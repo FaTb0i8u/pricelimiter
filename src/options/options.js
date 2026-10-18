@@ -111,6 +111,14 @@
       });
     });
 
+    settingsApi.SITES.forEach(function (site) {
+      var input = byId('site-' + site.id);
+      input.addEventListener('change', function () {
+        commit(settingsApi.setSiteEnabled(current, site.id, input.checked),
+          (input.checked ? 'Turned on for ' : 'Turned off for ') + site.label);
+      });
+    });
+
     byId('add-limit').addEventListener('submit', function (event) {
       event.preventDefault();
       var code = byId('add-currency').value;
@@ -267,6 +275,9 @@
     TOGGLES.forEach(function (key) {
       byId(key).checked = !!current[key];
     });
+    settingsApi.SITES.forEach(function (site) {
+      byId('site-' + site.id).checked = settingsApi.siteEnabled(current, site.id);
+    });
     renderConfidence();
     renderLimits();
   }
@@ -294,10 +305,27 @@
     });
   }
 
+  /**
+   * Opened from the toolbar on a site the user has switched off: say so, and
+   * put the switch for it within reach.
+   *
+   * @returns {string|null} the site's id, or null when not opened that way
+   */
+  function renderSiteOff() {
+    var match = /^#off-([a-z]+)$/.exec(location.hash);
+    var label = match ? settingsApi.siteLabel(match[1]) : '';
+    byId('site-off').hidden = !label;
+    if (!label) return null;
+    var names = document.querySelectorAll('.site-off-name');
+    for (var i = 0; i < names.length; i++) names[i].textContent = label;
+    return match[1];
+  }
+
   buildStaticControls();
   renderShortcut();
   byId('welcome').hidden = location.hash !== '#welcome';
   byId('unsupported').hidden = location.hash !== '#unsupported';
+  var offSite = renderSiteOff();
   renderHistoryCount();
   if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.onChanged) {
     chrome.storage.onChanged.addListener(function (changes, areaName) {
@@ -307,6 +335,7 @@
   settingsApi.load().then(function (loaded) {
     current = loaded;
     render();
+    if (offSite) byId('site-' + offSite).focus();
   });
   settingsApi.subscribe(function (next) {
     current = next;

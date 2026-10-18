@@ -125,3 +125,52 @@ test('automatic product-page lookups are opt-in', () => {
   assert.strictEqual(settings.sanitize(null).autoLookup, false);
   assert.strictEqual(settings.sanitize({ autoLookup: 1 }).autoLookup, true);
 });
+
+test('every site starts switched on, including for settings saved before the switches existed', () => {
+  for (const raw of [null, {}, { basis: 'kg', thresholds: { USD: 4 } }]) {
+    const clean = settings.sanitize(raw);
+    for (const site of settings.SITES) {
+      assert.strictEqual(clean.sites[site.id], true, site.id);
+      assert.strictEqual(settings.siteEnabled(clean, site.id), true, site.id);
+    }
+  }
+});
+
+test('site switches keep booleans and drop anything else', () => {
+  const clean = settings.sanitize({ sites: { amazon: false, google: 'no', walmart: 0, evil: false } });
+  assert.strictEqual(clean.sites.amazon, false);
+  assert.strictEqual(clean.sites.google, true, 'a non-boolean never switches a site off');
+  assert.strictEqual(clean.sites.walmart, true);
+  assert.ok(!('evil' in clean.sites), 'unknown ids are not stored');
+  assert.strictEqual(settings.sanitize({ sites: 'amazon' }).sites.amazon, true);
+});
+
+test('switching one site off leaves the others, the input and the defaults alone', () => {
+  const before = settings.sanitize(null);
+  const snapshot = JSON.stringify(before);
+  const off = settings.setSiteEnabled(before, 'amazon', false);
+  assert.strictEqual(settings.siteEnabled(off, 'amazon'), false);
+  assert.strictEqual(settings.siteEnabled(off, 'google'), true);
+  assert.strictEqual(settings.siteEnabled(off, 'aisle'), true);
+  assert.strictEqual(JSON.stringify(before), snapshot, 'input is not modified');
+  assert.strictEqual(settings.DEFAULTS.sites.amazon, true, 'defaults are not modified');
+  assert.strictEqual(settings.sanitize(null).sites.amazon, true);
+  assert.strictEqual(settings.siteEnabled(settings.setSiteEnabled(off, 'amazon', true), 'amazon'), true);
+  assert.deepStrictEqual(settings.setSiteEnabled(before, 'nonsense', false), before);
+});
+
+test('only Aisle left on: every store but Aisle is refused', () => {
+  let s = settings.sanitize(null);
+  for (const id of ['google', 'amazon', 'walmart']) s = settings.setSiteEnabled(s, id, false);
+  const on = settings.SITES.filter((site) => settings.siteEnabled(s, site.id)).map((site) => site.id);
+  assert.deepStrictEqual(on, ['aisle']);
+  // Survives the trip through storage.
+  assert.deepStrictEqual(settings.sanitize(JSON.parse(JSON.stringify(s))).sites, s.sites);
+});
+
+test('a page with no switch of its own is never refused', () => {
+  assert.strictEqual(settings.siteEnabled(settings.sanitize(null), 'generic'), true);
+  assert.strictEqual(settings.siteEnabled(null, 'amazon'), true);
+  assert.strictEqual(settings.siteLabel('amazon'), 'Amazon');
+  assert.strictEqual(settings.siteLabel('generic'), '');
+});
